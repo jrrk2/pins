@@ -51,7 +51,7 @@ namespace NINA.Equipment.Equipment.Origin {
         private const double DefaultMovingRate = 1;
 
         private static readonly TimeSpan GotoTimeout = TimeSpan.FromSeconds(240);
-        private static readonly TimeSpan InitializeTimeout = TimeSpan.FromSeconds(300);
+        private static readonly TimeSpan InitializeTimeout = TimeSpan.FromSeconds(600);   // a failed focus search alone took 308 s (2026-11-07)
 
         // Below this the view from the initial position is likely blocked: the tube is raised before it looks for stars to align on.
         private const double TreeClearDegrees = 40;

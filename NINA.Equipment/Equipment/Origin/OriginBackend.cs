@@ -783,21 +783,31 @@ namespace NINA.Equipment.Equipment.Origin {
             await DeclareConfiguredFilter(token);                                 // before the mount moves and aligns
             var start = DateTime.UtcNow;
             var link = LinkGeneration;
-            await RequireOk("RunInitialize", "TaskController", new JObject {
+            var reply = await Request("RunInitialize", "TaskController", new JObject {
                 ["Date"] = now.ToString("dd MM yyyy", CultureInfo.InvariantCulture),
                 ["Time"] = now.ToString("HH:mm:ss", CultureInfo.InvariantCulture),
                 ["TimeZone"] = timeZoneId,
                 ["Latitude"] = latitude * Math.PI / 180,
                 ["Longitude"] = longitude * Math.PI / 180,
                 ["FakeInitialize"] = fake
-            }, TimeSpan.FromSeconds(8), token);
+            }, TimeSpan.FromSeconds(8), token) ?? throw new OriginException("No answer from the telescope to RunInitialize");
+            // The firmware starts an initialisation by itself after a reboot (2026-11-07) and refuses a second. A real one can simply be waited for; that one will not be fake.
+            var alreadyRunning = !fake && reply.Value<int?>("ErrorCode") == InitializationAlreadyRunning;
+            if (alreadyRunning) {
+                lock (stateLock) {
+                    taskError = null;       // this refusal, recorded like any other task error, must not end the wait
+                }
+                RecordEvent("initialization_joined", "The telescope was already initialising; waiting for it");
+            } else {
+                ThrowOnError("RunInitialize", reply);
+            }
 
             var waited = System.Diagnostics.Stopwatch.StartNew();
             var limit = timeout ?? TimeSpan.FromSeconds(300);
             var state = string.Empty;
             var step = string.Empty;
             var percent = 0;
-            var seenInitializing = false;
+            var seenInitializing = alreadyRunning;
             while (true) {
                 if (waited.Elapsed >= limit) {
                     throw new OriginException($"Still {(state.Length == 0 ? "silent" : state)} after {limit.TotalSeconds:0} s (step {step}, {percent}%)");
@@ -838,6 +848,8 @@ namespace NINA.Equipment.Equipment.Origin {
                 throw new OriginException($"The initialisation ended in {state} but the mount reports that it is not aligned");
             }
         }
+
+        private const int InitializationAlreadyRunning = -73;
 
         internal TimeSpan InitializePollInterval { get; set; } = TimeSpan.FromMilliseconds(500);
         internal TimeSpan InitializeStartGrace { get; set; } = TimeSpan.FromSeconds(15);

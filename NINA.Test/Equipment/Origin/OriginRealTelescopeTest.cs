@@ -114,6 +114,34 @@ namespace NINA.Test.Equipment.Origin {
             }
         }
 
+        /// <summary>
+        /// How much of the time the camera is exposing when frames are taken back to back through TakeFrame, the port of OriginMonitor's snapshot.
+        /// OriginMonitor's own sequencer reaches 87-96% by starting the next exposure as soon as the previous frame is ready. Only the camera is used.
+        /// </summary>
+        [Test, Explicit("Takes frames for two minutes"), Order(6)]
+        public async Task Step6_SnapshotDutyCycle() {
+            var exposure = double.TryParse(Environment.GetEnvironmentVariable("ORIGIN_REAL_EXPOSURE"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var e) ? e : 10;
+            var backend = OriginBackend.Acquire(host);
+            try {
+                (await backend.ConnectAsync()).Should().BeTrue();
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                var frames = 0;
+                var longest = TimeSpan.Zero;
+                while (clock.Elapsed < TimeSpan.FromMinutes(2)) {
+                    var started = clock.Elapsed;
+                    var frame = await backend.TakeFrame(exposure, 800, 1, TimeSpan.FromSeconds(exposure + 60));
+                    frame.IsFits.Should().BeTrue();
+                    frames++;
+                    var took = clock.Elapsed - started;
+                    longest = took > longest ? took : longest;
+                }
+                var cycle = clock.Elapsed.TotalSeconds / frames;
+                Report($"{frames} frames of {exposure} s in {clock.Elapsed.TotalSeconds:0.0} s: {cycle:0.00} s a frame, the slowest {longest.TotalSeconds:0.00} s, duty {100 * exposure / cycle:0}%");
+            } finally {
+                backend.Release();
+            }
+        }
+
         [Test, Explicit("The focuser moves"), Order(4)]
         public async Task Step4_FocuserMovesAndComesBack() {
             var focuser = new OriginFocuser(host);

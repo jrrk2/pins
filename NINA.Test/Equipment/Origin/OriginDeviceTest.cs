@@ -607,6 +607,46 @@ namespace NINA.Test.Equipment.Origin {
         }
 
         [Test]
+        public async Task Initialize_WaitsForOneTheFirmwareStartedItself() {
+            // After a reboot the firmware initialises by itself and answers -73 to RunInitialize (2026-11-07).
+            await backend.ConnectAsync();
+            await PushTaskState("INITIALIZING");
+            telescope.Handlers["RunInitialize"] = command => {
+                _ = Task.Delay(300).ContinueWith(_ => PushTaskState("IDLE", sequence: 2));
+                return new JObject { ["ErrorCode"] = -73, ["ErrorMessage"] = "TaskController: initialization was already running when RunInitialize called." };
+            };
+
+            await backend.Initialize(52.2, 0.12, "UTC");
+
+            telescope.Count("RunInitialize").Should().Be(1);
+        }
+
+        [Test]
+        public async Task Initialize_ReportsWhenOneTheFirmwareStartedItselfFails() {
+            await backend.ConnectAsync();
+            await PushTaskState("INITIALIZING");
+            telescope.MountStatus = new JObject { ["IsAligned"] = false };
+            telescope.Handlers["RunInitialize"] = command => {
+                _ = Task.Delay(300).ContinueWith(_ => PushTaskState("INITIALIZING", "STOPPED", 2, new JObject { ["ErrorMessage"] = "Failed to find focus!" }));
+                return new JObject { ["ErrorCode"] = -73, ["ErrorMessage"] = "already running" };
+            };
+
+            var act = () => backend.Initialize(52.2, 0.12, "UTC");
+
+            await act.Should().ThrowAsync<OriginException>().WithMessage("*Failed to find focus*");
+        }
+
+        [Test]
+        public async Task Initialize_FakeIsNotSatisfiedByARealOneAlreadyRunning() {
+            await backend.ConnectAsync();
+            telescope.Handlers["RunInitialize"] = command => new JObject { ["ErrorCode"] = -73, ["ErrorMessage"] = "already running" };
+
+            var act = () => backend.Initialize(52.2, 0.12, "UTC", fake: true);
+
+            await act.Should().ThrowAsync<OriginException>().WithMessage("*-73*");
+        }
+
+        [Test]
         public async Task Initialize_RefusesAnUnknownTimeZoneBeforeMovingAnything() {
             await backend.ConnectAsync();
             var act = () => backend.Initialize(52.2, 0.12, "Not/AZone");
