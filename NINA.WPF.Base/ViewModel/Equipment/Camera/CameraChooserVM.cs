@@ -249,6 +249,15 @@ namespace NINA.WPF.Base.ViewModel.Equipment.Camera {
                     Logger.Error(ex);
                 }
 
+                /* Celestron Origin */
+                try {
+                    var origin = await new OriginInteraction(profileService).GetCameras(exposureDataFactory, imageDataFactory);
+                    devices.AddRange(origin);
+                    Logger.Info($"Found {origin.Count} Celestron Origin Cameras");
+                } catch (Exception ex) {
+                    Logger.Error(ex);
+                }
+
                 /* Alpaca */
                 try {
                     var alpacaInteraction = new AlpacaInteraction(profileService);

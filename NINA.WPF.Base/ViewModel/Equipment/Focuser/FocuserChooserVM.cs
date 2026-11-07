@@ -127,6 +127,15 @@ namespace NINA.WPF.Base.ViewModel.Equipment.Focuser {
                     Logger.Error(ex);
                 }
 
+                /* Celestron Origin */
+                try {
+                    var origin = await new OriginInteraction(profileService).GetFocusers();
+                    devices.AddRange(origin);
+                    Logger.Info($"Found {origin.Count} Celestron Origin Focusers");
+                } catch (Exception ex) {
+                    Logger.Error(ex);
+                }
+
                 /* Alpaca */
                 try {
                     var alpacaInteraction = new AlpacaInteraction(profileService);

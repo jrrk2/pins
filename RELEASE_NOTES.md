@@ -20,6 +20,7 @@ This allows you to safely return to a stable release if needed.
 
 ## General
 - The application now runs on .NET 10, bringing performance improvements and access to the latest runtime features.
+- Added native Celestron Origin camera, mount and focuser drivers. They connect directly to the telescope. Tested on a real telescope with a fake initialisation, including Stop during a goto; a real star alignment and a full autofocus have not been tested yet.
 
 ## Bugfixes
 - Dome parking now checks that the driver reports it is parked after movement stops and reports a failure if it is not. A fixed 10-minute timeout aborts parking if it does not complete.

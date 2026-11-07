@@ -65,6 +65,14 @@ PI.N.S. supports a wide range of astronomy equipment. Here is a list of tested d
 
 ---
 
+## 🔭 Celestron Origin
+
+PI.N.S. drives a Celestron Origin's camera, mount and focuser directly, with nothing else to install. The telescope is found from its network broadcast; on another subnet, set `ORIGIN_HOST` to its address. It accepts one client, so stop `OriginHeadless` and close the Celestron app first.
+
+An uninitialised mount shows as parked, and Unpark initialises it, which moves the mount. For testing, starting PI.N.S. with `ORIGIN_FAKE_INIT=1` makes Unpark skip the star alignment: the mount reports aligned, but its pointing is not real and a slew will not avoid the sun, so never use it with the telescope uncovered in daylight. The firmware can still move the mount during this: from the raised position it lowered the tube to 45° altitude. The telescope also focuses itself after a goto. It takes up the focuser's backlash itself, so leave backlash compensation off in the PI.N.S. autofocus settings. A focuser move cannot be stopped once started. On a real telescope, the link, camera, focuser, relative moves, and Stop during a goto have been tested with a fake initialisation. A real star alignment and a full autofocus have not.
+
+---
+
 ## 💬 Community & Support
 
 Questions or need help? Join the [Touch-N-Stars Discord](https://discord.com/invite/4gZJEMWFcN) — the frontend used by PI.N.S. — for support and discussion.

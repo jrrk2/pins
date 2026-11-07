@@ -71,6 +71,15 @@ namespace NINA.WPF.Base.ViewModel.Equipment.Telescope {
                                 }
                 */
 
+                /* Celestron Origin */
+                try {
+                    var origin = await new OriginInteraction(profileService).GetTelescopes();
+                    devices.AddRange(origin);
+                    Logger.Info($"Found {origin.Count} Celestron Origin Telescopes");
+                } catch (Exception ex) {
+                    Logger.Error(ex);
+                }
+
                 /* Alpaca */
                 try {
                     var alpacaInteraction = new AlpacaInteraction(profileService);
