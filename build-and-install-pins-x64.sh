@@ -115,10 +115,9 @@ OPENCV_EXTRA_MODULES="${OPENCV_EXTRA_MODULES:-true}"
 OPENCV_REQUIRE_LOCAL_PKGCONFIG="${OPENCV_REQUIRE_LOCAL_PKGCONFIG:-true}"
 
 OPENCVSHARP_REPO_URL="${OPENCVSHARP_REPO_URL:-https://github.com/shimat/opencvsharp.git}"
-OPENCVSHARP_BRANCH="${OPENCVSHARP_BRANCH:-main}"
+OPENCVSHARP_BRANCH="${OPENCVSHARP_BRANCH:-}"  # empty: the tag matching the OpenCvSharp4 version in NINA/NINA.csproj
 OPENCVSHARP_WORKDIR="${OPENCVSHARP_WORKDIR:-artifacts/src/opencvsharp}"
 OPENCVSHARP_OPENCV_VERSION="${OPENCVSHARP_OPENCV_VERSION:-4.11.0}"
-OPENCVSHARP_RUNTIME_PACKAGE="${OPENCVSHARP_RUNTIME_PACKAGE:-OpenCvSharp4.official.runtime.linux-x64}"
 
 SETUP_RUNTIME_PREREQS="${SETUP_RUNTIME_PREREQS:-true}"
 SETUP_FRAMINGASSISTANT_CACHE="${SETUP_FRAMINGASSISTANT_CACHE:-true}"
@@ -426,6 +425,8 @@ install_build_prerequisites() {
     libkrb5-dev \
     liblimesuite-dev \
     libnova-dev \
+    libleptonica-dev \
+    libopencv-contrib-dev \
     libopencv-dev \
     libpng-dev \
     libraw-dev \
@@ -775,38 +776,114 @@ ensure_modern_libxisf_if_enabled() {
   log "LibXISF upgraded and validated: $upgraded_header"
 }
 
-stage_opencvsharp_runtime_from_nuget() {
-  log "Staging OpenCvSharp Linux runtime from NuGet"
+find_opencv_cmake_dir() {
+  local multiarch candidate
+  multiarch="$(dpkg-architecture -qDEB_HOST_MULTIARCH 2>/dev/null || true)"
+
+  for candidate in \
+    "${OpenCV_DIR:-}" \
+    "$OPENCV_INSTALL_PREFIX/lib/cmake/opencv4" \
+    "$OPENCV_INSTALL_PREFIX/lib/$multiarch/cmake/opencv4" \
+    "/usr/lib/$multiarch/cmake/opencv4"; do
+    if [[ -n "$candidate" && -f "$candidate/OpenCVConfig.cmake" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+# The official OpenCvSharp linux-x64 runtime on NuGet is linked against Ubuntu 20.04 libraries (libtesseract.so.4, libavcodec.so.58,
+# libtiff.so.5, libIlmImf-2_5.so.25...), so on anything newer it cannot load and every image operation fails. Build it against this
+# machine's OpenCV instead, from the tag matching the managed wrapper.
+build_opencvsharp_extern() {
+  log "Building OpenCvSharpExtern against the local OpenCV"
 
   [[ "$TARGET_RUNTIME" == "linux-x64" ]] || {
-    warn "Skipping OpenCvSharp runtime staging for TARGET_RUNTIME=$TARGET_RUNTIME"
+    warn "Skipping OpenCvSharpExtern build for TARGET_RUNTIME=$TARGET_RUNTIME"
     return
   }
 
-  local runtime_version
-  runtime_version="$(sed -n 's/.*OpenCvSharp4\.official\.runtime\.\$(RuntimeIdentifier)" Version="\([^"]*\)".*/\1/p' NINA/NINA.csproj | head -n 1)"
-  [[ -n "$runtime_version" ]] || fail "Could not parse OpenCvSharp runtime package version from NINA/NINA.csproj"
-
-  local nuget_global_packages
-  nuget_global_packages="$(dotnet nuget locals global-packages --list | sed -n 's/^global-packages: //p' | head -n 1)"
-  [[ -n "$nuget_global_packages" ]] || fail "Could not determine NuGet global-packages path"
-
-  local package_root="$nuget_global_packages/${OPENCVSHARP_RUNTIME_PACKAGE,,}/$runtime_version"
-  local package_so="$package_root/runtimes/linux-x64/native/libOpenCvSharpExtern.so"
-
-  if [[ ! -f "$package_so" ]]; then
-    log "OpenCvSharp runtime package not found in cache, restoring NINA/NINA.csproj for $TARGET_RUNTIME"
-    dotnet restore NINA/NINA.csproj -r "$TARGET_RUNTIME"
+  local tag="$OPENCVSHARP_BRANCH"
+  if [[ -z "$tag" ]]; then
+    tag="$(sed -n 's/.*OpenCvSharp4\.official\.runtime\.\$(RuntimeIdentifier)" Version="\([^"]*\)".*/\1/p' NINA/NINA.csproj | head -n 1)"
+    [[ -n "$tag" ]] || fail "Could not parse the OpenCvSharp version from NINA/NINA.csproj"
   fi
 
-  [[ -f "$package_so" ]] || fail "OpenCvSharp runtime library not found: $package_so"
+  local opencv_dir
+  opencv_dir="$(find_opencv_cmake_dir)" || fail "OpenCV development files not found; install libopencv-dev and libopencv-contrib-dev"
+
+  local opencv_version
+  opencv_version="$(sed -n 's/^set(OpenCV_VERSION \([0-9.]*\)).*/\1/p' "$opencv_dir/OpenCVConfig-version.cmake" | head -n 1)"
+  [[ -n "$opencv_version" ]] || fail "Could not read the OpenCV version from $opencv_dir"
+  log "OpenCvSharp $tag, OpenCV $opencv_version from $opencv_dir"
+
+  local workdir_abs="$ROOT_DIR/$OPENCVSHARP_WORKDIR"
+  rm -rf "$OPENCVSHARP_WORKDIR"
+  mkdir -p "$(dirname "$OPENCVSHARP_WORKDIR")"
+  git clone --depth 1 --branch "$tag" "$OPENCVSHARP_REPO_URL" "$OPENCVSHARP_WORKDIR"
+
+  # OpenCV 4.10 and later need C++17.
+  sed -i 's/-std=c++11/-std=c++17/' "$OPENCVSHARP_WORKDIR/src/CMakeLists.txt"
+
+  # Some distribution packages ship libopencv_xfeatures2d and its subfolder, but not this top-level header.
+  local extra_cxx_flags=""
+  local opencv_prefix="${opencv_dir%%/lib/*}"
+  if [[ ! -f "$opencv_prefix/include/opencv4/opencv2/xfeatures2d.hpp" ]]; then
+    local extra_include="$workdir_abs/extra-include"
+    mkdir -p "$extra_include/opencv2"
+    log "opencv2/xfeatures2d.hpp is missing; fetching it from opencv_contrib $opencv_version"
+    curl -L --fail --retry 3 --retry-delay 5 -o "$extra_include/opencv2/xfeatures2d.hpp" \
+      "https://raw.githubusercontent.com/opencv/opencv_contrib/$opencv_version/modules/xfeatures2d/include/opencv2/xfeatures2d.hpp"
+    extra_cxx_flags="-I$extra_include"
+  fi
+
+  # A conda environment on PATH would otherwise supply its own OpenCV or dependencies, tying PINS to it.
+  local clean_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  env -u CONDA_PREFIX -u LD_LIBRARY_PATH PATH="$clean_path" cmake \
+    -S "$OPENCVSHARP_WORKDIR/src" \
+    -B "$OPENCVSHARP_WORKDIR/build" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    -DOpenCV_DIR="$opencv_dir" \
+    -DCMAKE_CXX_FLAGS="$extra_cxx_flags"
+  env -u CONDA_PREFIX -u LD_LIBRARY_PATH PATH="$clean_path" cmake --build "$OPENCVSHARP_WORKDIR/build" --parallel "$(nproc)"
+
+  local built_so="$OPENCVSHARP_WORKDIR/build/OpenCvSharpExtern/libOpenCvSharpExtern.so"
+  [[ -f "$built_so" ]] || fail "OpenCvSharpExtern build did not produce $built_so"
+
+  local unresolved
+  unresolved="$(env -u LD_LIBRARY_PATH ldd -r "$built_so" 2>&1 | grep -E 'not found|undefined symbol' || true)"
+  [[ -z "$unresolved" ]] || fail "OpenCvSharpExtern cannot load:"$'\n'"$unresolved"
+  # Read in full first: grep -q closing a pipe early counts as a failure under pipefail.
+  local linked exported
+  linked="$(env -u LD_LIBRARY_PATH ldd "$built_so")"
+  if grep -qE 'conda|/envs/' <<< "$linked"; then
+    fail "OpenCvSharpExtern was linked against a conda environment"
+  fi
+  exported="$(nm -D --defined-only "$built_so")"
+  grep -q ' core_Mat_new2$' <<< "$exported" || fail "OpenCvSharpExtern does not export the expected entry points"
 
   local stage_dir="NINA/External/$TARGET_RUNTIME"
   mkdir -p "$stage_dir"
-  cp -f "$package_so" "$stage_dir/libOpenCvSharpExtern.so"
+  cp -f "$built_so" "$stage_dir/libOpenCvSharpExtern.so"
   chmod 755 "$stage_dir/libOpenCvSharpExtern.so"
 
-  log "Staged OpenCvSharp runtime library at: $stage_dir/libOpenCvSharpExtern.so"
+  log "Staged OpenCvSharpExtern at: $stage_dir/libOpenCvSharpExtern.so"
+}
+
+# The apt packages that provide what a library is directly linked against. Libraries outside apt, such as an OpenCV built into /usr/local, add nothing.
+apt_packages_for_library() {
+  local library="$1"
+  local name resolved package
+
+  while IFS= read -r name; do
+    resolved="$(env -u LD_LIBRARY_PATH ldd "$library" | awk -v n="$name" '$1 == n { print $3 }')"
+    [[ -n "$resolved" ]] || continue
+    package="$(dpkg -S "$resolved" 2>/dev/null || dpkg -S "/usr$resolved" 2>/dev/null || dpkg -S "$(readlink -f "$resolved")" 2>/dev/null || true)"
+    [[ -n "$package" ]] && echo "${package%%:*}"
+  done < <(readelf -d "$library" | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/\1/p')
 }
 
 install_dotnet_10() {
@@ -975,6 +1052,13 @@ populate_external_bundle() {
 
   [[ -d "$runtime_dir" ]] || fail "$runtime_dir not found after repository clone"
 
+  # cio_file never stops writing when CIO_RA.TXT is a Git LFS pointer: it fills the disk.
+  local cio_data="NOVAS31/NOVAS31/CIO_RA.TXT"
+  git lfs pull --include="$cio_data" || true
+  if grep -q '^version https://git-lfs' "$cio_data"; then
+    fail "$cio_data is a Git LFS pointer; install git-lfs and run 'git lfs pull'"
+  fi
+
   # Rebuild NOVAS and sync generated files into the runtime-specific external layout.
   pushd "NOVAS31" >/dev/null
   make clean || true
@@ -1072,9 +1156,21 @@ build_core_pins_package() {
       log "Using OpenCvSharp native library from: $source_opencv_so"
     fi
     chmod 755 "$opencv_target"
+    # The publish also leaves NuGet's copy under this name, which cannot load on current distributions.
+    cp -f "$opencv_target" "$publish_root/libOpenCvSharpExtern.so"
+    chmod 755 "$publish_root/libOpenCvSharpExtern.so"
   else
     fail "OpenCvSharp native library not found in publish output (expected libOpenCvSharpExtern.so)"
   fi
+
+  # Loaded at runtime by these names, which only the -dev packages provide.
+  local core_depends=("libraw-dev" "libcfitsio-dev" "libhidapi-dev")
+  local package
+  while IFS= read -r package; do
+    [[ -n "$package" ]] && core_depends+=("$package")
+  done < <(apt_packages_for_library "$opencv_target" | sort -u)
+  local core_depends_line
+  core_depends_line="$(printf '%s\n' "${core_depends[@]}" | sort -u | paste -sd, - | sed 's/,/, /g')"
 
   rm -rf "$PACKAGE_ROOT"
   mkdir -p "$PACKAGE_ROOT/pins"
@@ -1125,6 +1221,7 @@ build_core_pins_package() {
     echo "Architecture: $DEB_ARCH"
     echo "Maintainer: PINS Team"
     echo "Installed-Size: $installed_size"
+    echo "Depends: $core_depends_line"
     echo "Description: Pins build for Ubuntu x64"
   } > "$control_dir/control"
 
@@ -2125,7 +2222,7 @@ main() {
 
   build_and_install_libgpiod
   populate_external_bundle
-  stage_opencvsharp_runtime_from_nuget
+  build_opencvsharp_extern
 
   determine_versions
   build_core_pins_package

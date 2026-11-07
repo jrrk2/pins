@@ -285,6 +285,12 @@ chown pi:pi "$publish_root/OpenCvSharpExtern.so"
 
 ---
 
+On `linux-x64`, `build-and-install-pins-x64.sh` builds this library from source instead, because the official NuGet runtime is linked against Ubuntu 20.04 libraries and cannot load on current distributions. To do that by hand, clone the [opencvsharp](https://github.com/shimat/opencvsharp) tag matching the `OpenCvSharp4` version in `NINA/NINA.csproj`, change `-std=c++11` to `-std=c++17` in `src/CMakeLists.txt`, and build `src` with `-DOpenCV_DIR` pointing at the OpenCV to use. It needs `libopencv-dev` and `libopencv-contrib-dev`. If `opencv2/xfeatures2d.hpp` is missing, take it from the matching `opencv_contrib` tag and add its folder with `-DCMAKE_CXX_FLAGS=-I...`. With a conda environment active, clear it from `PATH` first, or the library may link against it.
+
+`NOVAS31/NOVAS31/CIO_RA.TXT` is stored in Git LFS. Run `git lfs pull` before building NOVAS: given the LFS pointer instead, `cio_file` writes until the disk is full.
+
+---
+
 ## 5) Stage `/home/pi/pins` layout
 
 ```bash
@@ -556,7 +562,7 @@ plugin_dir=$(dirname "$project_path")
 tmp_dir="$plugin_dir/frontend-build"
 
 rm -rf "$tmp_dir" "$plugin_dir/app"
-git clone --branch pins --single-branch https://github.com/Touch-N-Stars/Touch-N-Stars.git "$tmp_dir"
+git clone --branch develop --single-branch https://github.com/Touch-N-Stars/Touch-N-Stars.git "$tmp_dir"
 pushd "$tmp_dir" >/dev/null
 npm install
 npm run build
