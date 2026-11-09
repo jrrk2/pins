@@ -33,9 +33,10 @@ using System.Threading.Tasks;
 namespace NINA.Test.Equipment.Origin {
 
     /// <summary>
-    /// Dithering as PI.N.S. does it, on the Origin, against OriginSimulator. Mount Dither fails for now: the mount can pulse guide, but PI.N.S.'s Origin
-    /// driver does not implement PulseGuide, so the first pulse throws; it passes once the driver does. The plate-solve guider (OriginTrackGuider) needs no
-    /// pulses. Mount Dither is N.I.N.A.'s DirectGuider, choosing its offsets and pulse guiding the
+    /// Dithering as PI.N.S. does it, on the Origin, against OriginSimulator. Mount Dither fails: the mount's guide input is hardware (a guide camera such as
+    /// an SSAG drives it directly, and PHD2 dithers through it), no firmware pulse command is known, and PI.N.S.'s Origin driver does not implement
+    /// PulseGuide, so the first pulse throws. It would pass only if such a command turned up. The plate-solve guider (OriginTrackGuider) needs no pulses.
+    /// Mount Dither is N.I.N.A.'s DirectGuider, choosing its offsets and pulse guiding the
     /// mount through the telescope mediator, as a dither instruction in a sequence would. Each dither is checked by plate solving: the field should move by
     /// the offset chosen, east and north, at 1.478"/pixel. Guiding with PHD2 (an SSAG, say) sends its corrections and its dithers to the mount the same way,
     /// as pulses, so short pulses are checked too.

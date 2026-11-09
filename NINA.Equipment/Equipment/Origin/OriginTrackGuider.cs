@@ -22,11 +22,14 @@ using System.Threading.Tasks;
 namespace NINA.Equipment.Equipment.Origin {
 
     /// <summary>
-    /// Guiding and dithering without a guide camera or pulse guiding. The mount itself can pulse guide, but in this set-up nothing drives it: there is no
-    /// guide camera, and PI.N.S.'s Origin driver does not implement PulseGuide (CanPulseGuide is false). Instead the frames
+    /// Guiding and dithering without a guide camera or pulse guiding. The mount's guide input is hardware: a guide camera such as an SSAG drives it directly
+    /// (PHD2 "on camera"), and PHD2 dithers through it too, so that set-up needs nothing from PI.N.S.'s driver; no firmware pulse command is known, so the
+    /// driver does not implement PulseGuide (CanPulseGuide is false) and Mount Dither cannot work. Without a guide camera, instead, the frames
     /// themselves are plate solved in the background, and the firmware is handed a fresh moving-target track for the target plus a correction learned
     /// from the solves plus a dither offset. The correction takes up what the pointing model leaves (a minute or so) and any drift; the dither moves the
     /// field between frames by N.I.N.A.'s own choice of offset (<see cref="DitherOffsetSelector"/>), as Mount Dither does.
+    ///
+    /// Not to be run together with PHD2 guiding through the mount's guide input: both would correct the same pointing.
     ///
     /// Offsets are on the sky at the target, arcseconds east (increasing RA) and north. Frames come from the imaging itself through <see cref="Feed"/>, so
     /// the guider never takes the camera; <see cref="GuideOnce"/> takes one itself, for when nothing else is using it.
