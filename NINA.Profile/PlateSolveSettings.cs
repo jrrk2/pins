@@ -34,8 +34,9 @@ namespace NINA.Profile {
         }
 
         protected override void SetDefaultValues() {
-            plateSolverType = PlateSolverEnum.ASTAP;
-            blindSolverType = BlindSolverEnum.ASTAP;
+            // pins runs on Linux, where astrometry.net's solve-field is the packaged solver
+            plateSolverType = OperatingSystem.IsWindows() ? PlateSolverEnum.ASTAP : PlateSolverEnum.LOCAL;
+            blindSolverType = OperatingSystem.IsWindows() ? BlindSolverEnum.ASTAP : BlindSolverEnum.LOCAL;
             blindFailoverEnabled = true;
             astrometryURL = "http://nova.astrometry.net";
             astrometryAPIKey = string.Empty;

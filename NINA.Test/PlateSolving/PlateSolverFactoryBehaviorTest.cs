@@ -13,6 +13,8 @@
 #endregion "copyright"
 
 using FluentAssertions;
+using System;
+using System.IO;
 using Moq;
 using NINA.Core.Enum;
 using NINA.Equipment.Interfaces;
@@ -28,6 +30,7 @@ namespace NINA.Test.PlateSolving {
     public class PlateSolverFactoryBehaviorTest {
 
         private Mock<IPlateSolveSettings> settings;
+        private string astap;
 
         [SetUp]
         public void SetUp() {
@@ -39,10 +42,17 @@ namespace NINA.Test.PlateSolving {
             settings.Object.PS2Location = @"C:\Solver\PlateSolve2.exe";
             settings.Object.PS3Location = @"C:\Solver\PlateSolve3.exe";
             settings.Object.AspsLocation = @"C:\Solver\asps.exe";
-            settings.Object.ASTAPLocation = @"C:\Solver\astap.exe";
+            // an ASTAP that exists, so the factory does not fall back to astrometry.net
+            astap = Path.GetTempFileName();
+            settings.Object.ASTAPLocation = astap;
             settings.Object.TheSkyXHost = "127.0.0.1";
             settings.Object.TheSkyXPort = 3040;
             settings.Object.PinPointCatalogType = Dc3PoinPointCatalogEnum.ppUCAC4;
+        }
+
+        [TearDown]
+        public void TearDown() {
+            File.Delete(astap);
         }
 
         private static IEnumerable<TestCaseData> PlateSolverCases() {
@@ -89,6 +99,28 @@ namespace NINA.Test.PlateSolving {
             IPlateSolver solver = PlateSolverFactory.GetBlindSolver(settings.Object);
 
             solver.Should().BeOfType(expectedType);
+        }
+
+        /// <summary>
+        /// Off Windows, a profile left on ASTAP without ASTAP installed solves with astrometry.net when solve-field is installed.
+        /// </summary>
+        [Test]
+        public void ResolveSolver_FallsBackToAstrometryNetWhenAstapIsMissing() {
+            var expected = OperatingSystem.IsWindows() ? PlateSolverEnum.ASTAP : PlateSolverEnum.LOCAL;
+
+            PlateSolverFactory.ResolveSolver(PlateSolverEnum.ASTAP, null, true).Should().Be(expected);
+            PlateSolverFactory.ResolveSolver(PlateSolverEnum.ASTAP, "/nowhere/astap", true).Should().Be(expected);
+        }
+
+        /// <summary>
+        /// An installed ASTAP, a missing solve-field, or any other choice of solver is left as the profile has it.
+        /// </summary>
+        [Test]
+        public void ResolveSolver_KeepsTheChosenSolverOtherwise() {
+            PlateSolverFactory.ResolveSolver(PlateSolverEnum.ASTAP, astap, true).Should().Be(PlateSolverEnum.ASTAP);
+            PlateSolverFactory.ResolveSolver(PlateSolverEnum.ASTAP, null, false).Should().Be(PlateSolverEnum.ASTAP);
+            PlateSolverFactory.ResolveSolver(PlateSolverEnum.ASTROMETRY_NET, null, true).Should().Be(PlateSolverEnum.ASTROMETRY_NET);
+            PlateSolverFactory.ResolveSolver(PlateSolverEnum.LOCAL, null, false).Should().Be(PlateSolverEnum.LOCAL);
         }
 
         /// <summary>

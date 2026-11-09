@@ -20,7 +20,7 @@ Build shape from `NINA.PlateSolving.csproj`:
   Concrete solver integrations:
   - `ASTAPSolver`
   - `AstrometryPlateSolver`
-  - `LocalPlateSolver`
+  - `LocalPlateSolver` (astrometry.net's `solve-field`: through Cygwin's bash on Windows, run directly on Linux from the astrometry.net package and its index files)
   - `Platesolve2Solver`
   - `Platesolve3Solver`
   - `AllSkyPlateSolver`
@@ -34,6 +34,7 @@ Build shape from `NINA.PlateSolving.csproj`:
 
 - `GetPlateSolver(...)` maps `PlateSolverEnum` values to concrete solver implementations.
 - `GetBlindSolver(...)` maps `BlindSolverEnum` values to the corresponding solver choice.
+- pins: off Windows, a profile on ASTAP with no ASTAP installed solves with `LocalPlateSolver` when `solve-field` is installed (`ResolveSolver`), and new profiles default to `LOCAL` there (`PlateSolveSettings.SetDefaultValues`). The Origin driver's own alignment solves (`OriginAstrometryNet`) call `solve-field` directly and never go through the profile.
 - `PlateSolverFactoryProxy` also constructs higher-level orchestration objects:
   - `ImageSolver`
   - `CaptureSolver`

@@ -21,13 +21,38 @@ using System.IO;
 
 namespace NINA.PlateSolving.Solvers {
 
+    /// <summary>
+    /// astrometry.net's solve-field: through Cygwin's bash on Windows, run directly elsewhere
+    /// (on Linux from the astrometry.net package, with its index files from /etc/astrometry.cfg).
+    /// </summary>
     internal class LocalPlateSolver : CLISolver {
         private string bashLocation;
+        private readonly bool native;
 
         public LocalPlateSolver(string cygwinRoot)
-            : base("cmd.exe") {
-            this.bashLocation = Path.GetFullPath(Path.Combine(cygwinRoot, "bin", "bash.exe"));
+            : base(OperatingSystem.IsWindows() ? "cmd.exe" : (FindNative("solve-field") ?? "/usr/bin/solve-field")) {
+            native = !OperatingSystem.IsWindows();
+            if (!native) {
+                this.bashLocation = Path.GetFullPath(Path.Combine(cygwinRoot, "bin", "bash.exe"));
+            }
         }
+
+        /// <summary>The path of an astrometry.net tool on this machine, or null when it isn't installed.</summary>
+        internal static string FindNative(string tool) {
+            if (OperatingSystem.IsWindows()) {
+                return null;
+            }
+            foreach (var dir in new[] { "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin" }) {
+                var path = Path.Combine(dir, tool);
+                if (File.Exists(path)) {
+                    return path;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>True when solve-field can run here without Cygwin.</summary>
+        internal static bool NativeAvailable => FindNative("solve-field") != null;
 
         protected override string GetArguments(
             string imageFilePath,
@@ -47,7 +72,9 @@ namespace NINA.PlateSolving.Solvers {
             options.Add($"--objs {parameter.MaxObjects}");
             options.Add("--no-plots");
             options.Add("--resort");
-            options.Add($"--downsample {parameter.DownSampleFactor}");
+            if (!native || parameter.DownSampleFactor > 0) {
+                options.Add($"--downsample {parameter.DownSampleFactor}");
+            }
             var lowArcSecPerPix = imageProperties.ArcSecPerPixel - 0.2;
             var highArcSecPerPix = imageProperties.ArcSecPerPixel + 0.2;
             options.Add("--scale-units arcsecperpix");
@@ -60,6 +87,9 @@ namespace NINA.PlateSolving.Solvers {
                 options.Add($"--radius {parameter.SearchRadius.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)}");
             }
 
+            if (native) {
+                return $"{string.Join(" ", options)} \"{imageFilePath}\"";
+            }
             return string.Format("/C \"\"{0}\" --login -c '/usr/bin/solve-field {1} \"{2}\"'\"", bashLocation, string.Join(" ", options), imageFilePath.Replace("\\", "/"));
         }
 
@@ -68,11 +98,16 @@ namespace NINA.PlateSolving.Solvers {
             if (File.Exists(outputFilePath)) {
                 var startInfo = new System.Diagnostics.ProcessStartInfo();
                 startInfo.WindowStyle = System.Diagnostics.ProcessWindowStyle.Normal;
-                startInfo.FileName = "cmd.exe";
                 startInfo.UseShellExecute = false;
                 startInfo.RedirectStandardOutput = true;
                 startInfo.CreateNoWindow = true;
-                startInfo.Arguments = string.Format("/C \"\"{0}\" --login -c 'wcsinfo \"{1}\"'\"", bashLocation, outputFilePath.Replace("\\", "/"));
+                if (native) {
+                    startInfo.FileName = FindNative("wcsinfo") ?? "wcsinfo";
+                    startInfo.Arguments = $"\"{outputFilePath}\"";
+                } else {
+                    startInfo.FileName = "cmd.exe";
+                    startInfo.Arguments = string.Format("/C \"\"{0}\" --login -c 'wcsinfo \"{1}\"'\"", bashLocation, outputFilePath.Replace("\\", "/"));
+                }
                 using (var process = new System.Diagnostics.Process()) {
                     process.StartInfo = startInfo;
                     process.Start();
@@ -140,6 +175,12 @@ namespace NINA.PlateSolving.Solvers {
                 }
             }
             return result;
+        }
+
+        protected override List<string> GetSideCarFilePaths(string imageFilePath) {
+            // solve-field leaves its star list and a marker beside the image
+            var stem = Path.Combine(Path.GetDirectoryName(imageFilePath), Path.GetFileNameWithoutExtension(imageFilePath));
+            return new List<string> { stem + ".axy", stem + ".solved" };
         }
 
         protected override string GetLocalizedPlateSolverName() {

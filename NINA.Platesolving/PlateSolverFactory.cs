@@ -13,6 +13,8 @@
 #endregion "copyright"
 
 using NINA.Profile.Interfaces;
+using NINA.Core.Utility;
+using System;
 using NINA.PlateSolving.Solvers;
 using NINA.Core.Enum;
 using NINA.PlateSolving.Interfaces;
@@ -53,6 +55,7 @@ namespace NINA.PlateSolving {
         /// <param name="solver"> Plate Solver that should be used</param>
         /// <returns></returns>
         private static IPlateSolver GetPlateSolver(IPlateSolveSettings plateSolveSettings, PlateSolverEnum solver) {
+            solver = ResolveSolver(solver, plateSolveSettings.ASTAPLocation, LocalPlateSolver.NativeAvailable);
             return solver switch {
                 PlateSolverEnum.ASTROMETRY_NET => new AstrometryPlateSolver(plateSolveSettings.AstrometryURL, plateSolveSettings.AstrometryAPIKey),
                 PlateSolverEnum.LOCAL => new LocalPlateSolver(plateSolveSettings.CygwinLocation),
@@ -63,6 +66,21 @@ namespace NINA.PlateSolving {
                 PlateSolverEnum.PINPONT => new Dc3PinPointSolver(plateSolveSettings),
                 _ => new ASTAPSolver(plateSolveSettings.ASTAPLocation),
             };
+        }
+
+        /// <summary>
+        /// Off Windows, a profile still on its ASTAP default with no ASTAP installed is solved by
+        /// astrometry.net's solve-field when that is installed, rather than failing every solve.
+        /// </summary>
+        internal static PlateSolverEnum ResolveSolver(PlateSolverEnum solver, string astapLocation, bool nativeAstrometryNet) {
+            if (solver == PlateSolverEnum.ASTAP
+                && !OperatingSystem.IsWindows()
+                && nativeAstrometryNet
+                && (string.IsNullOrWhiteSpace(astapLocation) || !System.IO.File.Exists(astapLocation))) {
+                Logger.Info("ASTAP is not installed; plate solving with astrometry.net's solve-field instead");
+                return PlateSolverEnum.LOCAL;
+            }
+            return solver;
         }
 
         public static IPlateSolver GetPlateSolver(IPlateSolveSettings plateSolveSettings) {
