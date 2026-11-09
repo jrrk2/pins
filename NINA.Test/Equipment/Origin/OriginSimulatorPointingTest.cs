@@ -150,6 +150,15 @@ namespace NINA.Test.Equipment.Origin {
                 fourth.Should().BeLessThan(5);
                 reported.Should().BeLessThan(5, "the reported position comes from the model, not the invented frame");
 
+                // a sync typed in after a slew, with no frame since (the last frame shows another part of the sky): it must pair with the encoders now
+                (await mount.SlewToCoordinates(new Coordinates(Angle.ByDegree(chosen[1].Ra), Angle.ByDegree(chosen[1].Dec), Epoch.J2000), default)).Should().BeTrue();
+                await Task.Delay(TimeSpan.FromSeconds(3));
+                var here = await Sim("truth");
+                mount.Sync(new Coordinates(Angle.ByDegree(here.Value<double>("true_ra_deg")), Angle.ByDegree(here.Value<double>("true_dec_deg")), Epoch.J2000)).Should().BeTrue();
+                var afterTypedSync = await Slew(chosen[1]);
+                Report($"{chosen[1].Name} after a sync typed in with no frame since the slew: {afterTypedSync:0.0}' out");
+                afterTypedSync.Should().BeLessThan(5, "a sync after a slew must not be paired with an older frame's encoders");
+
                 // Park: the celestial pole, where the sun never comes, with tracking stopped
                 await mount.Park(default);
                 await Task.Delay(TimeSpan.FromSeconds(5));

@@ -100,7 +100,8 @@ namespace NINA.Equipment.Equipment.Origin {
         private DateTime trackUntil;
         private (double Ra, double Dec, double Alt, double Az)? modelled;      // radians, from the model at the last poll
         private bool firmwareAligned;                                          // the telescope's own initialisation ran: its frame is real
-        private bool unparkedByPins;                                           // PI.N.S.'s Unpark has run this session (counts only with UNPARK_ALIGN=0)
+        private bool unparkedByPins;
+        private DateTime lastMoveUtc = DateTime.MinValue;                        // the end of the last slew, park or manual move: a frame from before it shows somewhere else                                           // PI.N.S.'s Unpark has run this session (counts only with UNPARK_ALIGN=0)
 
         public OriginTelescope(IProfileService profileService, string host, int port = OriginBackend.DefaultPort, string logDirectory = null, string filterFile = null) : base(host, port, logDirectory, filterFile) {
             this.profileService = profileService;
@@ -336,6 +337,7 @@ namespace NINA.Equipment.Equipment.Origin {
                 throw new InvalidOperationException($"{Name}: the azimuth is {backend.CordWrap.Turned:0} degrees from where the cables hang straight; turn the other way");
             }
             int alt, azm;
+            lastMoveUtc = DateTime.UtcNow;
             lock (axisRates) {
                 axisRates[axis == TelescopeAxes.Secondary ? 0 : 1] = firmwareRate;
                 alt = axisRates[0];
@@ -416,6 +418,7 @@ namespace NINA.Equipment.Equipment.Origin {
                 throw;
             } finally {
                 slewInProgress = false;
+                lastMoveUtc = DateTime.UtcNow;
                 RaisePropertyChanged(nameof(Slewing));
             }
         }
@@ -449,10 +452,13 @@ namespace NINA.Equipment.Equipment.Origin {
             var when = DateTime.UtcNow;
             var m = backend.Data.Mount;
             var (enc0, enc1) = (OriginPointingModel.Deg(m.Enc0), OriginPointingModel.Deg(m.Enc1));
-            if (backend.LastExposure is { } exposure && DateTime.UtcNow - exposure.Arrived < SyncFrameAge && backend.EncodersAt(exposure.MidExposure) is { } then) {
+            // only a frame taken since the mount last moved shows where it is now: a sync typed in after a slew, with the last frame from before it, would otherwise
+            // be paired with the encoders of another part of the sky (47 degrees out after one such sync, OriginSimulator 2026-11-09)
+            if (backend.LastExposure is { } exposure && DateTime.UtcNow - exposure.Arrived < SyncFrameAge && exposure.MidExposure > lastMoveUtc
+                && backend.EncodersAt(exposure.MidExposure) is { } then) {
                 (when, enc0, enc1) = (exposure.MidExposure, then.Enc0, then.Enc1);
             } else {
-                Logger.Info($"{Name}: no frame in the last {SyncFrameAge.TotalMinutes:0} minutes to match the sync to: using the encoders now");
+                Logger.Info($"{Name}: no frame since the mount last moved to match the sync to: using the encoders now");
             }
             var (alt, az) = sky.ToHorizon(AstroUtil.EuclidianModulus(j2000.RA, 24) * 15, j2000.Dec, when);
             var point = new OriginCalibrationPoint(Math.IEEERemainder(enc0, 360), Math.IEEERemainder(enc1, 360), alt, az);
@@ -502,6 +508,7 @@ namespace NINA.Equipment.Equipment.Origin {
                 parkedAtPolaris = !stopRequested;
             } finally {
                 slewInProgress = false;
+                lastMoveUtc = DateTime.UtcNow;
                 RaisePropertyChanged(nameof(Slewing));
             }
         }
