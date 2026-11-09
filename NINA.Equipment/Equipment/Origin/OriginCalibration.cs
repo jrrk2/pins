@@ -185,15 +185,17 @@ namespace NINA.Equipment.Equipment.Origin {
         public const double RefineSamePlaceDegrees = 2;
 
         /// <summary>
-        /// Adds a solved point, such as the solve that checks a goto, and refits: the model gets better with each target at no extra cost. Returns how far the point
-        /// was from the model before, arcminutes (the pointing error there), or null if there was no point or it was turned away.
+        /// Adds a solved point, such as the solve that checks a goto, and refits: the model gets better with each target at no extra cost. Below three points the
+        /// model is a level-base one from the newest point (<see cref="OriginPointingModel.Level"/>), right where the mount last synced; from three, the fitted one. Returns how far the point was from the model before, arcminutes
+        /// (the pointing error there), or null if there was no model yet, no point, or it was turned away.
         /// </summary>
         public double? Refine(OriginCalibrationPoint point) {
             if (point == null) {
                 return null;
             }
             var error = Model?.ResidualArcmin(point);
-            if (error > RefineRejectDegrees * 60) {
+            // a level-base model from one or two points can be degrees out away from them on uneven ground: only a fitted model turns a point away
+            if (Points.Count >= 3 && error > RefineRejectDegrees * 60) {
                 Logger.Warning($"Origin calibration: a point {error / 60:0.0} degrees from the model is left out: a bad solve, or the mount slipped (check the azimuth clutch) and needs calibrating again");
                 return null;
             }
@@ -202,6 +204,11 @@ namespace NINA.Equipment.Equipment.Origin {
             if (Points.Count >= 3) {
                 Model = OriginPointingModel.Fit(Points);
                 Logger.Info($"Origin calibration: refined with a point {error:0.0} arcmin out, now {Points.Count} points, rms {Model.RmsArcmin:0.0} arcmin{(Points.Count >= OriginPointingModel.PointsForFlexure ? $", flexure {Model.Flexure:0.00}" : "")}");
+            } else {
+                // From the newest point only: averaging two far-apart points on a tilted base puts both out (4.8 degrees each on a 9.9 degree tilt, OriginSimulator
+                // 2026-11-09), and centring expects a slew back to where it synced to land there. The older point waits for the fit.
+                Model = OriginPointingModel.Level(new[] { point });
+                Logger.Info($"Origin calibration: {Points.Count} point{(Points.Count == 1 ? "" : "s")}; a level-base model from the newest until there are three");
             }
             return error;
         }

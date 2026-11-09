@@ -35,12 +35,39 @@ namespace NINA.Equipment.Equipment.Origin {
     /// so that Unpark is the way to initialise it.
     /// </summary>
     public class OriginTelescope : OriginDevice, ITelescope {
-        /// <summary>Set to 1 or true, Unpark asks for the firmware's fake initialisation, for testing: no star alignment, and the mount then reports aligned. The firmware may still move the mount, to 45° altitude.</summary>
+        /// <summary>
+        /// Unpark normally asks for the firmware's fake initialisation (no star alignment of its own; the firmware may still move the tube, to 45 degrees altitude)
+        /// and then aligns from PI.N.S.'s own plate solves (<see cref="UnparkPointsVariable"/>). Set to 0 or false, Unpark runs the firmware's own initialisation
+        /// instead; that is also the action <see cref="CelestronInitializeAction"/>.
+        /// </summary>
         public const string FakeInitializeVariable = "ORIGIN_FAKE_INIT";
 
-        // Polaris (J2000), a safe place for the tube.
+        /// <summary>
+        /// Set to 1, the mount moves with the sun up: for OriginSimulator in daylight only. Otherwise nothing moves while the sun is above the horizon, because a
+        /// fake initialisation, PI.N.S.'s default, does not have the firmware's own refusal ("Sun is above horizon").
+        /// </summary>
+        public const string AllowDaylightVariable = "ORIGIN_ALLOW_DAYLIGHT";
+
+        /// <summary>The driver action that runs the telescope's own initialisation: a focus search, two alignment stars it chooses, and a level base assumed.</summary>
+        public const string CelestronInitializeAction = "CelestronInitialize";
+
+        // Polaris (J2000), near the pole: the park for the firmware's own frame.
         private const double ParkRaHours = 2.5303;
         private const double ParkDecDegrees = 89.264;
+
+        /// <summary>
+        /// Plate-solved points Unpark takes after a fake initialisation, to replace the firmware's invented frame with a real one: 1 (default) gives a level-base
+        /// model, 3 the quick calibration (about 2.5 minutes), 0 none (gotos then go to the right coordinates in the invented frame, not on the sky).
+        /// </summary>
+        public const string UnparkPointsVariable = "UNPARK_ALIGN";
+
+        // A track by the model runs this long and is renewed this long before it ends; N.I.N.A. expects tracking to go on.
+        private static readonly TimeSpan TrackLength = TimeSpan.FromHours(1);
+        private static readonly TimeSpan TrackRenewBefore = TimeSpan.FromMinutes(10);
+        private static readonly TimeSpan TrackStep = TimeSpan.FromSeconds(30);
+
+        // A sync within this long of a frame arriving is taken to be that frame's plate solve.
+        private static readonly TimeSpan SyncFrameAge = TimeSpan.FromMinutes(3);
 
         private const int MaxFirmwareRate = 9;
         private const double FullRateDegreesPerSecond = 4;
@@ -65,6 +92,15 @@ namespace NINA.Equipment.Equipment.Origin {
         private readonly int[] axisRates = new int[2];  // altitude, azimuth
         private Coordinates targetCoordinates;
 
+        // PI.N.S.'s own pointing (OriginCalibration), set up by Unpark after a fake initialisation and refined by every Sync. While it has a model, slews and the
+        // reported position go by it rather than by the firmware's frame.
+        private OriginCalibration calibration;
+        private IOriginSky sky;
+        private (double RaDegrees, double DecDegrees)? trackTarget;
+        private DateTime trackUntil;
+        private (double Ra, double Dec, double Alt, double Az)? modelled;      // radians, from the model at the last poll
+        private bool firmwareAligned;                                          // the telescope's own initialisation ran: its frame is real
+
         public OriginTelescope(IProfileService profileService, string host, int port = OriginBackend.DefaultPort, string logDirectory = null, string filterFile = null) : base(host, port, logDirectory, filterFile) {
             this.profileService = profileService;
         }
@@ -78,7 +114,64 @@ namespace NINA.Equipment.Equipment.Origin {
         // On the real telescope the mount reported aligned within a second of a fake initialisation (2026-10-15, 2026-10-31).
         internal TimeSpan FakeAlignedWait { get; set; } = TimeSpan.FromSeconds(10);
 
-        internal static bool FakeInitializeRequested(string value) => value?.Trim() is "1" || string.Equals(value?.Trim(), "true", StringComparison.OrdinalIgnoreCase);
+        // the default: only "0" or "false" asks for the firmware's own initialisation on Unpark
+        internal static bool FakeInitializeRequested(string value) => !(value?.Trim() is "0" || string.Equals(value?.Trim(), "false", StringComparison.OrdinalIgnoreCase));
+
+        public override IList<string> SupportedActions => new List<string> { CelestronInitializeAction };
+
+        /// <summary><see cref="CelestronInitializeAction"/>: the telescope's own initialisation, whatever Unpark would do. PI.N.S.'s own pointing is dropped, the firmware's frame then being real.</summary>
+        public override string Action(string actionName, string actionParameters) {
+            if (!string.Equals(actionName, CelestronInitializeAction, StringComparison.OrdinalIgnoreCase)) {
+                return base.Action(actionName, actionParameters);
+            }
+            Task.Run(() => Initialize(fake: false, CancellationToken.None)).GetAwaiter().GetResult();
+            return "Initialised by the telescope";
+        }
+
+        internal bool AllowDaylight { get; set; } = Environment.GetEnvironmentVariable(AllowDaylightVariable)?.Trim() == "1";
+
+        /// <summary>The sun's altitude, degrees, at a UTC time and a site (latitude, longitude in degrees): <see cref="GeometricSunAltitude"/>.</summary>
+        internal Func<DateTime, double, double, double> SunAltitude { get; set; } = GeometricSunAltitude;
+
+        /// <summary>
+        /// The sun's geometric altitude, degrees, from the Astronomical Almanac's low-precision formulas for the sun (about 0.01 degrees, 1950-2050) and for
+        /// Greenwich mean sidereal time, with no files or native libraries: a safety check must not depend on N.I.N.A.'s NOVAS, which without its JPLEPH file
+        /// returns a wrong position rather than failing (2026-11-09, under test).
+        /// </summary>
+        internal static double GeometricSunAltitude(DateTime utc, double latitude, double longitude) {
+            const double d2r = Math.PI / 180;
+            var n = utc.ToUniversalTime().Subtract(new DateTime(2000, 1, 1, 12, 0, 0, DateTimeKind.Utc)).TotalDays;
+            var l = 280.460 + 0.9856474 * n;
+            var g = (357.528 + 0.9856003 * n) * d2r;
+            var lambda = (l + 1.915 * Math.Sin(g) + 0.020 * Math.Sin(2 * g)) * d2r;
+            var epsilon = (23.439 - 0.0000004 * n) * d2r;
+            var ra = Math.Atan2(Math.Cos(epsilon) * Math.Sin(lambda), Math.Cos(lambda));
+            var dec = Math.Asin(Math.Sin(epsilon) * Math.Sin(lambda));
+            var lst = (18.697374558 + 24.06570982441908 * n) * 15 + longitude;
+            var hourAngle = lst * d2r - ra;
+            var phi = latitude * d2r;
+            return Math.Asin(Math.Sin(phi) * Math.Sin(dec) + Math.Cos(phi) * Math.Cos(dec) * Math.Cos(hourAngle)) / d2r;
+        }
+
+        // Nothing moves with the sun up: the tube could be pointed at it. Stopping always works.
+        private void RefuseInDaylight(string what) {
+            if (AllowDaylight) {
+                return;
+            }
+            var site = profileService.ActiveProfile.AstrometrySettings;
+            var sun = SunAltitude(DateTime.UtcNow, site.Latitude, site.Longitude);
+            if (sun > 0) {
+                throw new InvalidOperationException($"{Name}: not {what} with the sun {sun:0} degrees above the horizon");
+            }
+        }
+
+        internal int UnparkPoints { get; set; } = int.TryParse(Environment.GetEnvironmentVariable(UnparkPointsVariable), out var n) && n >= 0 ? n : 1;
+
+        /// <summary>The plate solver for PI.N.S.'s own pointing: astrometry.net's solve-field by default.</summary>
+        internal Func<OriginFrame, CancellationToken, Task<(double RaDegrees, double DecDegrees)?>> Solve { get; set; } = new OriginAstrometryNet().Solve;
+
+        /// <summary>PI.N.S.'s pointing model, or null while the firmware's frame is used.</summary>
+        public OriginPointingModel PointingModel => calibration?.Model;
 
         public override string Id => "Origin_Mount";
         public override string Name => "Celestron Origin Mount";
@@ -92,6 +185,20 @@ namespace NINA.Equipment.Equipment.Origin {
                 throw new OriginException("No status from the mount");
             }
             mount = Backend.Data.Mount;
+            if (calibration?.Model is { } model && sky != null) {
+                var (alt, az) = model.ToSky(OriginPointingModel.Deg(mount.Enc0), OriginPointingModel.Deg(mount.Enc1));
+                var (ra, dec) = sky.ToJ2000(alt, az, DateTime.UtcNow);
+                modelled = (OriginPointingModel.Rad(ra), OriginPointingModel.Rad(dec), OriginPointingModel.Rad(alt), OriginPointingModel.Rad(az));
+            } else {
+                modelled = null;
+            }
+            if (trackTarget != null && !slewInProgress && DateTime.UtcNow > trackUntil - TrackRenewBefore) {
+                try {
+                    await RenewTrack(token);
+                } catch (OriginException ex) {
+                    Logger.Warning($"{Name}: could not renew the track: {ex.Message}");
+                }
+            }
             RaisePropertyChanged(nameof(Slewing));
             int azimuthRate;
             lock (axisRates) {
@@ -112,10 +219,10 @@ namespace NINA.Equipment.Equipment.Origin {
         private bool aligned => mount.IsAligned && (Backend?.Data.TaskController is not { IsReadyReported: true } task || task.IsReady);
         private bool gotoOver => mount.IsGotoOver;
         private bool tracking => mount.IsTracking;
-        private double raRadians => mount.Ra;
-        private double decRadians => mount.Dec;
-        private double altRadians => mount.Altitude;
-        private double azRadians => mount.Azimuth;
+        private double raRadians => modelled?.Ra ?? mount.Ra;
+        private double decRadians => modelled?.Dec ?? mount.Dec;
+        private double altRadians => modelled?.Alt ?? mount.Altitude;
+        private double azRadians => modelled?.Az ?? mount.Azimuth;
 
         // Radians on the telescope (the simulator sends degrees, which this rejects in favour of the profile's site), and only meaningful once aligned.
         private bool SiteIsPlausible => aligned && Math.Abs(mount.Latitude) <= Math.PI / 2 && Math.Abs(mount.Longitude) <= Math.PI;
@@ -216,6 +323,9 @@ namespace NINA.Equipment.Equipment.Origin {
                 throw new InvalidOperationException($"{Name} is in a goto: stop it first");
             }
             var firmwareRate = FirmwareRate(rate);
+            if (firmwareRate != 0) {
+                RefuseInDaylight("moving");
+            }
             if (axis == TelescopeAxes.Primary && !backend.CordWrap.CanMove(Math.Sign(firmwareRate), OriginCordWrap.MarginFor(firmwareRate))) {
                 throw new InvalidOperationException($"{Name}: the azimuth is {backend.CordWrap.Turned:0} degrees from where the cables hang straight; turn the other way");
             }
@@ -264,6 +374,7 @@ namespace NINA.Equipment.Equipment.Origin {
             if (!aligned) {
                 throw new InvalidOperationException($"{Name} is not initialised: unpark it first (the mount homes and aligns on the stars)");
             }
+            RefuseInDaylight("slewing");
 
             var j2000 = coordinates.Transform(Epoch.J2000);
             targetCoordinates = j2000;
@@ -272,7 +383,20 @@ namespace NINA.Equipment.Equipment.Origin {
             slewInProgress = true;
             RaisePropertyChanged(nameof(Slewing));
             try {
-                await backend.Goto(AstroUtil.EuclidianModulus(j2000.RA, 24), j2000.Dec, GotoTimeout, token);
+                if (calibration?.Model != null) {
+                    // PI.N.S.'s own pointing: a move by encoder feedback, then a moving-target track by the model, which the firmware follows
+                    var raDegrees = AstroUtil.EuclidianModulus(j2000.RA, 24) * 15;
+                    if (sky.ToHorizon(raDegrees, j2000.Dec, DateTime.UtcNow).Altitude < 10) {
+                        throw new InvalidOperationException($"{Name}: the target is below 10 degrees altitude");
+                    }
+                    trackTarget = null;
+                    await calibration.Track(raDegrees, j2000.Dec, TrackLength, TrackStep, token);
+                    trackTarget = (raDegrees, j2000.Dec);
+                    trackUntil = DateTime.UtcNow + TrackLength;
+                } else {
+                    trackTarget = null;
+                    await backend.Goto(AstroUtil.EuclidianModulus(j2000.RA, 24), j2000.Dec, GotoTimeout, token);
+                }
                 if (!stopRequested) {
                     var state = await backend.WaitUntilIdle(SettleGrace, SettleTimeout, () => !stopRequested, SettleCheckInterval, token);
                     if (!stopRequested && !string.Equals(state, "IDLE", StringComparison.OrdinalIgnoreCase)) {
@@ -294,39 +418,153 @@ namespace NINA.Equipment.Equipment.Origin {
         public void StopSlew() {
             var backend = Backend ?? throw new OriginException($"{Name} is not connected");
             stopRequested = true;
+            trackTarget = null;
             lock (axisRates) {
                 Array.Clear(axisRates);
             }
             Task.Run(() => backend.AbortMotion()).GetAwaiter().GetResult();
         }
 
-        /// <summary>Always false: see the class comment.</summary>
+        /// <summary>
+        /// Adds where the tube really points, from a plate solve (N.I.N.A.'s centring, Touch-N-Stars' plate solve and sync), to PI.N.S.'s pointing model: every
+        /// centring is a calibration point, and three make the full model. A track in progress is renewed by the new model. False without PI.N.S.'s pointing (after
+        /// the firmware's own initialisation, whose SyncToRaDec has never been seen working: centring then uses a measured correction), or when the point is
+        /// turned away (degrees from a fitted model: a bad solve, or the mount moved).
+        /// </summary>
         public bool Sync(Coordinates coordinates) {
-            Logger.Info($"{Name}: no sync on this mount; PI.N.S. centring uses a measured correction instead");
-            return false;
+            var backend = Backend;
+            if (calibration == null || sky == null || backend == null) {
+                Logger.Info($"{Name}: no sync without PI.N.S.'s own pointing; centring uses a measured correction instead");
+                return false;
+            }
+            var j2000 = coordinates.Transform(Epoch.J2000);
+            // The solve is of the last frame: pair it with the encoders at that frame's mid-exposure, not now. The plate solve takes 10-30 s, and meanwhile the mount
+            // tracks by a model that may still be rough, so now the encoders point elsewhere (a 2.6' floor on centring without this, OriginSimulator 2026-11-09).
+            var when = DateTime.UtcNow;
+            var m = backend.Data.Mount;
+            var (enc0, enc1) = (OriginPointingModel.Deg(m.Enc0), OriginPointingModel.Deg(m.Enc1));
+            if (backend.LastExposure is { } exposure && DateTime.UtcNow - exposure.Arrived < SyncFrameAge && backend.EncodersAt(exposure.MidExposure) is { } then) {
+                (when, enc0, enc1) = (exposure.MidExposure, then.Enc0, then.Enc1);
+            } else {
+                Logger.Info($"{Name}: no frame in the last {SyncFrameAge.TotalMinutes:0} minutes to match the sync to: using the encoders now");
+            }
+            var (alt, az) = sky.ToHorizon(AstroUtil.EuclidianModulus(j2000.RA, 24) * 15, j2000.Dec, when);
+            var point = new OriginCalibrationPoint(Math.IEEERemainder(enc0, 360), Math.IEEERemainder(enc1, 360), alt, az);
+            calibration.Refine(point);
+            if (!calibration.Points.Contains(point)) {
+                return false;
+            }
+            Logger.Info($"{Name}: synced; {calibration.Points.Count} pointing points, rms {calibration.Model.RmsArcmin:0.0} arcmin");
+            if (trackTarget != null) {
+                Task.Run(() => RenewTrack(CancellationToken.None)).GetAwaiter().GetResult();
+            }
+            return true;
         }
 
+        /// <summary>
+        /// The Origin has no park of its own, so PI.N.S. defines it: the tube points at the celestial pole and stops tracking. A tube left there into the day can
+        /// never see the sun, which stays within 23.4 degrees of the equator and so at least 66.6 degrees from the pole, and the pole does not move. That matters
+        /// more than unwinding the cables, which only go the way that keeps them within the limit. With PI.N.S.'s pointing: due north (south in the southern
+        /// hemisphere) at the latitude's altitude, by encoder feedback. After the telescope's own initialisation: its goto to Polaris. After a fake initialisation
+        /// with no plate solve yet, where north is not known: refused. Unpark only clears it.
+        /// </summary>
         public async Task Park(CancellationToken token) {
-            parkedAtPolaris = await SlewToCoordinates(new Coordinates(Angle.ByHours(ParkRaHours), Angle.ByDegree(ParkDecDegrees), Epoch.J2000), token);
+            var backend = Backend ?? throw new OriginException($"{Name} is not connected");
+            RefuseInDaylight("parking");
+            if (calibration?.Model == null && !firmwareAligned && FakeInitialize && aligned) {
+                throw new InvalidOperationException($"{Name}: no plate solve yet, so the celestial pole cannot be found to park on; plate solve and sync first");
+            }
+            if (calibration?.Model == null) {
+                // the firmware's own frame is real: its goto, then no tracking
+                parkedAtPolaris = await SlewToCoordinates(new Coordinates(Angle.ByHours(ParkRaHours), Angle.ByDegree(ParkDecDegrees), Epoch.J2000), token);
+                await backend.AbortMotion(token);
+                return;
+            }
+            trackTarget = null;
+            stopRequested = false;
+            slewInProgress = true;
+            RaisePropertyChanged(nameof(Slewing));
+            try {
+                await backend.AbortMotion(token);
+                var latitude = SiteLatitude;
+                var (enc0, enc1) = calibration.Model.ToEncoders(Math.Abs(latitude), latitude >= 0 ? 0 : 180);
+                await calibration.MoveTo(enc0, enc1, token);
+                parkedAtPolaris = !stopRequested;
+            } finally {
+                slewInProgress = false;
+                RaisePropertyChanged(nameof(Slewing));
+            }
+        }
+
+        // A fresh track from now for the target, by the current model: before the last one ends, and after a sync.
+        private async Task RenewTrack(CancellationToken token) {
+            if (trackTarget is not var (ra, dec) || calibration?.Model == null || Backend is not { } backend) {
+                return;
+            }
+            await backend.QueryMount(token);
+            await backend.TrackMovingTarget(calibration.BuildTrack(ra, dec, DateTime.UtcNow + TimeSpan.FromSeconds(1), TrackLength, TrackStep), token);
+            trackUntil = DateTime.UtcNow + TrackLength;
+        }
+
+        // After a fake initialisation: plate-solved points where PI.N.S. chooses, so that gotos land on the sky and not in the firmware's invented frame.
+        private async Task AlignFromPlateSolves(OriginBackend backend, double latitude, double longitude, double elevation, CancellationToken token) {
+            if (UnparkPoints <= 0) {
+                Logger.Warning($"{Name}: {UnparkPointsVariable}=0: no plate solves; gotos go to the right coordinates in the firmware's invented frame, not on the sky");
+                return;
+            }
+            sky = SofaOriginSky.ForOrigin(backend, latitude, longitude, elevation);
+            calibration = new OriginCalibration(backend, sky, Solve, new SofaOriginSky(latitude, longitude, elevation));
+            try {
+                if (UnparkPoints >= 3) {
+                    await calibration.Calibrate(new (double, double)[] { (-120, 3.5), (0, 18.5), (120, 3.5) }, token: token);
+                } else {
+                    calibration.Refine(await calibration.Measure(2, 800, token));
+                }
+            } catch (OriginException ex) {
+                Logger.Error($"{Name}: could not plate solve during Unpark ({ex.Message}); gotos use the firmware's invented frame until a plate solve and sync");
+            }
+            if (calibration.Model == null) {
+                Logger.Warning($"{Name}: no plate solve during Unpark (cloud, or solve-field and its indices are not installed); gotos use the firmware's invented frame until a plate solve and sync");
+            } else {
+                Logger.Info($"{Name}: pointing from {calibration.Points.Count} plate solve{(calibration.Points.Count == 1 ? "" : "s")}, base tilt {calibration.Model.BaseTilt.Degrees:0.0} degrees");
+            }
         }
 
         /// <summary>
         /// On an initialised mount this only clears the parked state. Otherwise it runs the telescope's initialisation: the tube is raised if the tilt sensor says it is low, then the
-        /// mount homes and aligns on the stars, which takes minutes and needs a clear sky. The site comes from the profile, and an unset site is refused rather than aligning for the wrong place.
+        /// mount homes and aligns on the stars, which takes minutes and needs a clear sky. With ORIGIN_FAKE_INIT the firmware's alignment is skipped and PI.N.S. takes its own
+        /// plate solves instead (<see cref="UnparkPointsVariable"/>). The site comes from the profile, and an unset site is refused rather than aligning for the wrong place.
         /// </summary>
         public async Task Unpark(CancellationToken token) {
+            var backend = Backend ?? throw new OriginException($"{Name} is not connected");
+            RefuseInDaylight("unparking");
+            var site = profileService.ActiveProfile.AstrometrySettings;
             if (aligned) {
                 parkedAtPolaris = false;
+                // PI.N.S. restarted on a telescope already fake-initialised: its own pointing has to be set up again
+                if (FakeInitialize && !firmwareAligned && calibration?.Model == null && !(site.Latitude == 0 && site.Longitude == 0)) {
+                    await AlignFromPlateSolves(backend, site.Latitude, site.Longitude, site.Elevation, token);
+                    await Poll(token);
+                }
                 return;
             }
+            await Initialize(FakeInitialize, token);
+        }
+
+        private async Task Initialize(bool fake, CancellationToken token) {
             var backend = Backend ?? throw new OriginException($"{Name} is not connected");
+            RefuseInDaylight("initialising");
             var site = profileService.ActiveProfile.AstrometrySettings;
             if (site.Latitude == 0 && site.Longitude == 0) {
                 throw new InvalidOperationException($"{Name} cannot be initialised without a site: set the latitude and longitude in the profile");
             }
-            var fake = FakeInitialize;
+            trackTarget = null;
+            calibration = null;
+            sky = null;
+            modelled = null;
+            firmwareAligned = false;
             if (fake) {
-                Logger.Warning($"{Name}: {FakeInitializeVariable} is set: skipping the star alignment, so the mount's pointing cannot be trusted and it will not avoid the sun");
+                Logger.Info($"{Name}: fake initialisation: PI.N.S. aligns from its own plate solves; the firmware will not avoid the sun");
             } else if (backend.Data.OrientationLastUpdate.HasValue && backend.Data.Orientation.Altitude < TreeClearDegrees) {
                 await backend.RaiseTube(token: token);      // only to give the alignment a view of the stars
             }
@@ -345,6 +583,7 @@ namespace NINA.Equipment.Equipment.Origin {
                 }
             }
             parkedAtPolaris = false;
+            firmwareAligned = !fake;
             await Poll(token);
             if (fake) {
                 var waited = System.Diagnostics.Stopwatch.StartNew();
@@ -355,6 +594,8 @@ namespace NINA.Equipment.Equipment.Origin {
                     await Task.Delay(TimeSpan.FromMilliseconds(250), token);
                     await Poll(token);
                 }
+                await AlignFromPlateSolves(backend, site.Latitude, site.Longitude, site.Elevation, token);
+                await Poll(token);
             }
         }
     }

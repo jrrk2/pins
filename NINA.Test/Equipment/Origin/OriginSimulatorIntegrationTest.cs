@@ -65,7 +65,7 @@ namespace NINA.Test.Equipment.Origin {
             }
         }
 
-        private OriginTelescope NewMount() => new(profile.Object, host, port, Path.Combine(workDirectory, "logs"), Path.Combine(workDirectory, "filter")) { SettleGrace = TimeSpan.Zero };
+        private OriginTelescope NewMount() => new(profile.Object, host, port, Path.Combine(workDirectory, "logs"), Path.Combine(workDirectory, "filter")) { SettleGrace = TimeSpan.Zero, AllowDaylight = true };
 
         [Test]
         public async Task Mount_SlewsAndReportsTheNewPosition() {

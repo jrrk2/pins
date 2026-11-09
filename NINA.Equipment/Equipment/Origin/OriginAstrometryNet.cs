@@ -17,6 +17,7 @@ using System;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -29,12 +30,17 @@ namespace NINA.Equipment.Equipment.Origin {
     /// </summary>
     public sealed class OriginAstrometryNet {
         private static readonly Regex center = new(@"Field center: \(RA,Dec\) = \(([-\d.]+), ([-\d.]+)\) deg", RegexOptions.Compiled);
-        private readonly string indexDirectory;
+        private readonly string[] indexDirectories;
         private readonly TimeSpan timeout;
 
+        /// <param name="indexDirectory">Where the index files are; otherwise ORIGIN_INDEX_DIR, or whichever of ~/astrometry_indices, /usr/share/astrometry and
+        /// /usr/local/share/astrometry exist (Ubuntu installs its index packages, such as astrometry-data-tycho2-07-littleendian, in /usr/share/astrometry).</param>
         public OriginAstrometryNet(string indexDirectory = null, TimeSpan? timeout = null) {
-            this.indexDirectory = indexDirectory ?? Environment.GetEnvironmentVariable("ORIGIN_INDEX_DIR")
-                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "astrometry_indices");
+            var configured = indexDirectory ?? Environment.GetEnvironmentVariable("ORIGIN_INDEX_DIR");
+            indexDirectories = configured != null
+                ? new[] { configured }
+                : new[] { Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "astrometry_indices"), "/usr/share/astrometry", "/usr/local/share/astrometry" }
+                    .Where(Directory.Exists).ToArray();
             this.timeout = timeout ?? TimeSpan.FromSeconds(90);
         }
 
@@ -43,13 +49,16 @@ namespace NINA.Equipment.Equipment.Origin {
             if (!frame.IsFits) {
                 return null;
             }
+            if (indexDirectories.Length == 0) {
+                throw new OriginException("No astrometry.net index files: install astrometry-data-tycho2-07-littleendian, or put index files in ~/astrometry_indices");
+            }
             var dir = Path.Combine(Path.GetTempPath(), "origin-solve-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(dir);
             try {
                 var image = Path.Combine(dir, "frame.fits");
                 var config = Path.Combine(dir, "astrometry.cfg");
                 await File.WriteAllBytesAsync(image, frame.Data, token);
-                await File.WriteAllTextAsync(config, $"cpulimit {(int)timeout.TotalSeconds}\nadd_path {indexDirectory}\nautoindex\n", token);
+                await File.WriteAllTextAsync(config, $"cpulimit {(int)timeout.TotalSeconds}\n{string.Concat(indexDirectories.Select(d => $"add_path {d}\n"))}autoindex\n", token);
                 var start = new ProcessStartInfo("solve-field") {
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,

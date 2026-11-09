@@ -56,7 +56,7 @@ namespace NINA.Equipment.Equipment.Origin {
         public abstract string Description { get; }
         public string DriverInfo => $"Direct connection to the telescope at {host}";
         public string DriverVersion => CoreUtil.Version;
-        public IList<string> SupportedActions => new List<string>();
+        public virtual IList<string> SupportedActions => new List<string>();
 
         public bool Connected {
             get => connected;
@@ -138,7 +138,7 @@ namespace NINA.Equipment.Equipment.Origin {
         public void SetupDialog() {
         }
 
-        public string Action(string actionName, string actionParameters) => throw new NotSupportedException();
+        public virtual string Action(string actionName, string actionParameters) => throw new NotSupportedException($"{actionName} is not an action of this device");
 
         public string SendCommandString(string command, bool raw = true) => throw new NotSupportedException();
 

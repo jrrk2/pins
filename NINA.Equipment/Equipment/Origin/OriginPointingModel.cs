@@ -149,6 +149,24 @@ namespace NINA.Equipment.Equipment.Origin {
             return new OriginPointingModel(best.Q[0], best.Q[1], best.Q[2], best.Q[3], best.K, best.F, best.C) { RmsArcmin = best.Rms, Points = points.Count };
         }
 
+        /// <summary>
+        /// A model from one or two points that assumes a level base: the azimuth zero and the altitude zero only (their means over the points), no tilt, flexure or
+        /// cone error. After a fake initialisation it turns the firmware's invented frame into a real one, near enough to find a target; on uneven ground a
+        /// slew far from the points can still be degrees out, until three points allow <see cref="Fit"/>.
+        /// </summary>
+        public static OriginPointingModel Level(IReadOnlyList<OriginCalibrationPoint> points) {
+            if (points.Count == 0) {
+                throw new ArgumentException("At least one solved point is needed", nameof(points));
+            }
+            var k = points.Average(p => p.Altitude - p.Enc1);
+            var s = points.Sum(p => Math.Sin(Rad(p.Azimuth - p.Enc0)));
+            var c = points.Sum(p => Math.Cos(Rad(p.Azimuth - p.Enc0)));
+            var half = Math.Atan2(s, c) / 2;
+            var model = new OriginPointingModel(Math.Cos(half), 0, 0, Math.Sin(half), k, 0) { Points = points.Count };
+            model.RmsArcmin = Math.Sqrt(points.Average(p => Math.Pow(model.ResidualArcmin(p), 2)));
+            return model;
+        }
+
         /// <summary>The angle between where the model says the tube points and where a point says it did, arcminutes.</summary>
         public double ResidualArcmin(OriginCalibrationPoint p) {
             var (alt, az) = ToSky(p.Enc0, p.Enc1);

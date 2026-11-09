@@ -138,6 +138,7 @@ Architecture: amd64
 Maintainer: PINS Team
 Installed-Size: $installed_size
 Depends: libc6 (>= $(ldd --version | sed -n '1s/.* \([0-9]*\.[0-9]*\).*/\1/p')), libssl3t64 | libssl3, libudev1, libusb-1.0-0
+Recommends: astrometry-data-tycho2-07-littleendian | astrometry-data-tycho2-07
 Conflicts: pins
 Description: PI.N.S. with Touch-N-Stars and Celestron Origin drivers
  Self-contained test build. Run "pins" and open http://localhost:5000.

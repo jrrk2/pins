@@ -161,6 +161,22 @@ namespace NINA.Test.Equipment.Origin {
         }
 
         [Test]
+        public void EncodersAt_InterpolatesBetweenReadingsAcrossTheSeam() {
+            var backend = new OriginBackend("127.0.0.1", 1, Path.GetTempPath(), Path.Combine(Path.GetTempPath(), "origin-" + Guid.NewGuid().ToString("N"), "filter"));
+            var t0 = new DateTime(2026, 11, 9, 20, 0, 0, DateTimeKind.Utc);
+            backend.RecordEncoders(t0, 179, 10);
+            backend.RecordEncoders(t0.AddSeconds(1), -179, 12);
+
+            var mid = backend.EncodersAt(t0.AddSeconds(0.5));
+
+            mid.Should().NotBeNull();
+            Math.IEEERemainder(mid.Value.Enc0 - 180, 360).Should().BeApproximately(0, 1e-9, "the short way across the seam");
+            mid.Value.Enc1.Should().BeApproximately(11, 1e-9);
+            backend.EncodersAt(t0.AddSeconds(-10)).Should().BeNull("before the history");
+            backend.EncodersAt(t0.AddSeconds(30)).Should().BeNull("too long after the last reading");
+        }
+
+        [Test]
         public void Fit_NeedsThreePoints() {
             var points = Points(TrueModel(), 0);
 

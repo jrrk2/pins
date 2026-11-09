@@ -76,7 +76,7 @@ namespace NINA.Test.Equipment.Origin {
                 var state = Newtonsoft.Json.Linq.JObject.Parse(await http.GetStringAsync($"http://{host}:{port}/sim/state"));
                 File.WriteAllText(Path.Combine(workDirectory, "cordwrap.json"), new Newtonsoft.Json.Linq.JObject { ["neutral_enc0_degrees"] = state["cord"].Value<double>("neutral_enc0_deg") }.ToString());
             }
-            mount = new OriginTelescope(profile.Object, host, port, Path.Combine(workDirectory, "logs"), Path.Combine(workDirectory, "filter")) { SettleGrace = TimeSpan.Zero };
+            mount = new OriginTelescope(profile.Object, host, port, Path.Combine(workDirectory, "logs"), Path.Combine(workDirectory, "filter")) { SettleGrace = TimeSpan.Zero, AllowDaylight = true };
             (await mount.Connect(default)).Should().BeTrue();
             backend = OriginBackend.Acquire(host, port);          // the mount's own link, for frames
             // the mediator, as TelescopeVM forwards to the mount

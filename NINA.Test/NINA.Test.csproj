@@ -68,6 +68,13 @@
     <None Include="..\NINA\External\linux-x64\NOVAS\libnovas_c.so" Link="External\linux-x64\NOVAS\libnovas_c.so" Condition="Exists('..\NINA\External\linux-x64\NOVAS\libnovas_c.so')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <!-- NOVAS's data: without JPLEPH it returns wrong sun and moon positions rather than failing -->
+    <None Include="..\NINA\External\linux-x64\NOVAS\cio_ra.bin" Link="External\linux-x64\NOVAS\cio_ra.bin" Condition="Exists('..\NINA\External\linux-x64\NOVAS\cio_ra.bin')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\NINA\External\JPLEPH" Link="External\JPLEPH" Condition="Exists('..\NINA\External\JPLEPH')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="..\NINA.Sequencer\Editing\UI-COVERAGE.md" LogicalName="SequenceEditorCoverage" />

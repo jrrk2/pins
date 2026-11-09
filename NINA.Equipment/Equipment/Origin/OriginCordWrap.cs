@@ -12,6 +12,7 @@
 
 #endregion "copyright"
 
+using NINA.Core.Utility;
 using Newtonsoft.Json.Linq;
 using System;
 using System.IO;
@@ -67,16 +68,28 @@ namespace NINA.Equipment.Equipment.Origin {
         /// <summary>Degrees of azimuth from cable-neutral, positive with increasing Enc0. Zero until the first reading.</summary>
         public double Turned { get; private set; }
 
-        /// <summary>Follows a new azimuth encoder reading, in radians as the mount reports it.</summary>
+        /// <summary>
+        /// Follows a new azimuth encoder reading, in radians as the mount reports it. With no neutral yet, here or kept from an earlier session, the first reading
+        /// becomes cable-neutral and is kept: whoever connects first is asked (in the release notes) to do so with the cables hanging straight. Delete the file
+        /// after unwinding the cables to set it again.
+        /// </summary>
         public void Update(double enc0Radians) {
             var e = Wrap(OriginPointingModel.Deg(enc0Radians));
+            var save = false;
             lock (sync) {
                 if (last is double previous) {
                     Turned += Wrap(e - previous);
+                } else if (neutral is double n) {
+                    Turned = Wrap(e - n);
                 } else {
-                    Turned = neutral is double n ? Wrap(e - n) : 0;
+                    neutral = e;
+                    Turned = 0;
+                    save = true;
                 }
                 last = e;
+            }
+            if (save) {
+                Save();
             }
         }
 
@@ -89,9 +102,23 @@ namespace NINA.Equipment.Equipment.Origin {
                 neutral = e;
                 Turned = 0;
             }
-            if (file != null) {
+            Save();
+        }
+
+        private void Save() {
+            if (file == null) {
+                return;
+            }
+            double? n;
+            lock (sync) {
+                n = neutral;
+            }
+            try {
                 Directory.CreateDirectory(Path.GetDirectoryName(file));
-                File.WriteAllText(file, new JObject { ["neutral_enc0_degrees"] = neutral, ["set_utc"] = DateTime.UtcNow.ToString("o") }.ToString());
+                File.WriteAllText(file, new JObject { ["neutral_enc0_degrees"] = n, ["set_utc"] = DateTime.UtcNow.ToString("o") }.ToString());
+                Logger.Info($"Origin: cable-neutral at Enc0 {n:0.00} degrees, kept in {file}");
+            } catch (IOException ex) {
+                Logger.Warning($"Origin: could not keep the cable-neutral in {file}: {ex.Message}");
             }
         }
 

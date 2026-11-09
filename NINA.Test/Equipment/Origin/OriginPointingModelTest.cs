@@ -153,6 +153,23 @@ namespace NINA.Test.Equipment.Origin {
         }
 
         [Test]
+        public void CordWrap_KeepsTheFirstReadingAsNeutralWhenNoneIsSaved() {
+            var file = Path.Combine(Path.GetTempPath(), "origin-" + Guid.NewGuid().ToString("N"), "cordwrap.json");
+            var first = new OriginCordWrap(file);
+            first.HasNeutral.Should().BeFalse();
+
+            first.Update(Rad(-45));
+            first.Update(Rad(-30));
+
+            first.HasNeutral.Should().BeTrue();
+            first.Turned.Should().BeApproximately(15, 1e-9);
+            File.Exists(file).Should().BeTrue("the neutral is kept for the next session");
+            var next = new OriginCordWrap(file);
+            next.Update(Rad(-30));
+            next.Turned.Should().BeApproximately(15, 1e-9, "the next session counts from the same neutral");
+        }
+
+        [Test]
         public void CordWrap_ResumesFromTheSavedNeutral() {
             var file = Path.Combine(Path.GetTempPath(), "origin-cord-" + Guid.NewGuid().ToString("N"), "cordwrap.json");
             try {

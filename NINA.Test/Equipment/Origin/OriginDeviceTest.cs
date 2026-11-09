@@ -82,6 +82,9 @@ namespace NINA.Test.Equipment.Origin {
         };
 
         private OriginTelescope NewTelescope() => new(profile.Object, "127.0.0.1", telescope.Port, logDirectory, filterFile) {
+            UnparkPoints = 0,                       // the fake telescope has no sky to solve; OriginSimulatorPointingTest covers the plate solves
+            FakeInitialize = false,                 // the tests of the firmware's own initialisation; those of the fake one set it
+            SunAltitude = (_, _, _) => -30,         // night, whenever the tests run
             SettleGrace = TimeSpan.Zero,
             SettleCheckInterval = TimeSpan.FromMilliseconds(10),
             PollInterval = TimeSpan.FromMilliseconds(20)
@@ -1000,7 +1003,8 @@ namespace NINA.Test.Equipment.Origin {
         }
 
         [Test]
-        public async Task Mount_ParkIsASlewToPolarisAndClearsOnUnpark() {
+        public async Task Mount_ParkOnTheFirmwaresFrameIsAGotoToPolarisThenNoTrackingAndClearsOnUnpark() {
+            // after the telescope's own initialisation: the pole, where the sun never comes, and the tube left still
             var mount = NewTelescope();
             await mount.Connect(default);
             await PushTaskState("IDLE");
@@ -1010,6 +1014,7 @@ namespace NINA.Test.Equipment.Origin {
             mount.AtPark.Should().BeTrue();
             var sent = telescope.Received.Single(m => m.Value<string>("Command") == "GotoRaDec");
             sent.Value<double>("Dec").Should().BeApproximately(89.264 * Math.PI / 180, 1e-9);
+            telescope.Commands.Last(c => c is "HaltTasks" or "GotoRaDec").Should().Be("HaltTasks", "tracking stops after the goto");
             await mount.Unpark(default);
             mount.AtPark.Should().BeFalse();
             telescope.Count("RunInitialize").Should().Be(0);
@@ -1136,17 +1141,59 @@ namespace NINA.Test.Equipment.Origin {
         }
 
         [Test]
-        public void Mount_FakeInitialiseIsOffWhenTheVariableIsNotSet() {
-            OriginTelescope.FakeInitializeRequested(null).Should().BeFalse();
+        public async Task Mount_RefusesToMoveWithTheSunUp() {
+            var mount = NewTelescope();
+            mount.SunAltitude = (_, _, _) => 12;
+            await mount.Connect(default);
+            await PushTaskState("IDLE");
+
+            await FluentActions.Invoking(() => mount.SlewToCoordinates(new Coordinates(Angle.ByHours(1), Angle.ByDegree(10), Epoch.J2000), default)).Should().ThrowAsync<InvalidOperationException>().WithMessage("*sun*");
+            await FluentActions.Invoking(() => mount.Park(default)).Should().ThrowAsync<InvalidOperationException>().WithMessage("*sun*");
+            FluentActions.Invoking(() => mount.MoveAxis(TelescopeAxes.Primary, 1)).Should().Throw<InvalidOperationException>().WithMessage("*sun*");
+            mount.MoveAxis(TelescopeAxes.Primary, 0);      // stopping always works
+            telescope.Count("GotoRaDec").Should().Be(0);
+            mount.Disconnect();
         }
 
-        [TestCase("", false)]
+        [Test]
+        public async Task Mount_MovesWithTheSunUpOnlyWhenAllowedForTheSimulator() {
+            var mount = NewTelescope();
+            mount.SunAltitude = (_, _, _) => 12;
+            mount.AllowDaylight = true;
+            await mount.Connect(default);
+            await PushTaskState("IDLE");
+
+            mount.MoveAxis(TelescopeAxes.Primary, 1);
+
+            await WaitFor(() => telescope.Received.Any(m => m.Value<string>("Command") == "Slew" && m.Value<int>("AzmRate") != 0));
+            mount.MoveAxis(TelescopeAxes.Primary, 0);
+            mount.Disconnect();
+        }
+
+        // References from astropy (get_sun, AltAz, no refraction) at 52.2 N, 0.12 E
+        [TestCase("2026-06-21T12:00:00Z", 61.24)]
+        [TestCase("2026-11-09T00:00:00Z", -54.44)]
+        [TestCase("2026-11-09T12:00:00Z", 20.76)]
+        [TestCase("2026-03-20T07:00:00Z", 7.97)]
+        [TestCase("2026-12-21T08:00:00Z", -1.60)]
+        public void SunAltitude_AgreesWithAnIndependentEphemeris(string utc, double altitude) {
+            var when = DateTime.Parse(utc, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AdjustToUniversal);
+
+            OriginTelescope.GeometricSunAltitude(when, 52.2, 0.12).Should().BeApproximately(altitude, 0.05);
+        }
+
+        [Test]
+        public void Mount_FakeInitialiseIsTheDefault() {
+            OriginTelescope.FakeInitializeRequested(null).Should().BeTrue("PI.N.S. aligns from its own plate solves unless told otherwise");
+        }
+
+        [TestCase("", true)]
         [TestCase("0", false)]
         [TestCase("false", false)]
+        [TestCase(" FALSE ", false)]
         [TestCase("1", true)]
         [TestCase("true", true)]
-        [TestCase(" TRUE ", true)]
-        public void Mount_FakeInitialiseIsOnlyOnWhenAskedFor(string value, bool expected) {
+        public void Mount_FakeInitialiseIsOffOnlyWhenAskedFor(string value, bool expected) {
             OriginTelescope.FakeInitializeRequested(value).Should().Be(expected);
         }
 

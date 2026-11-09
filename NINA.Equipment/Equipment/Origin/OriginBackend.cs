@@ -526,6 +526,9 @@ namespace NINA.Equipment.Equipment.Origin {
             Data.Process(message);
             if (source == "Mount" && message["Enc0"] is { Type: JTokenType.Float or JTokenType.Integer } enc0) {
                 CordWrap.Update(enc0.Value<double>());
+                if (message["Enc1"] is { Type: JTokenType.Float or JTokenType.Integer } enc1) {
+                    RecordEncoders(DateTime.UtcNow, OriginPointingModel.Deg(enc0.Value<double>()), OriginPointingModel.Deg(enc1.Value<double>()));
+                }
             }
             last[$"{source}/{command}"] = message;
             if (source == "TaskController" && !string.IsNullOrEmpty(message.Value<string>("ErrorMessage"))) {
@@ -1035,17 +1038,62 @@ namespace NINA.Equipment.Equipment.Origin {
         /// showing the previous exposure or ISO (seen after a change of either, 2026-10-14) is asked for once more, now that the parameters were resent. A second PNG is returned for the
         /// caller to refuse; check <see cref="OriginFrame.IsFits"/>. One capture at a time: a second call waits for the first.
         /// </summary>
+        // The encoders over the last few minutes, about one reading a second, and when the last frame was exposed: a plate solve describes the sky at its
+        // mid-exposure, and by the time it is synced the mount has moved on (OriginTelescope.Sync).
+        private readonly object encoderHistoryLock = new();
+        private readonly Queue<(DateTime Utc, double Enc0, double Enc1)> encoderHistory = new();
+        private static readonly TimeSpan EncoderHistoryLength = TimeSpan.FromMinutes(5);
+
+        /// <summary>The middle of the last frame's exposure and when it arrived, UTC; null before the first.</summary>
+        public (DateTime MidExposure, DateTime Arrived)? LastExposure { get; private set; }
+
+        internal void RecordEncoders(DateTime utc, double enc0Degrees, double enc1Degrees) {
+            lock (encoderHistoryLock) {
+                encoderHistory.Enqueue((utc, enc0Degrees, enc1Degrees));
+                while (encoderHistory.Count > 0 && utc - encoderHistory.Peek().Utc > EncoderHistoryLength) {
+                    encoderHistory.Dequeue();
+                }
+            }
+        }
+
+        /// <summary>The encoders, degrees, at a moment in the last few minutes, between the two readings around it; null if none is that close.</summary>
+        public (double Enc0, double Enc1)? EncodersAt(DateTime utc) {
+            lock (encoderHistoryLock) {
+                (DateTime Utc, double Enc0, double Enc1)? before = null, after = null;
+                foreach (var r in encoderHistory) {
+                    if (r.Utc <= utc) {
+                        before = r;
+                    } else {
+                        after = r;
+                        break;
+                    }
+                }
+                if (before is not { } b) {
+                    return null;
+                }
+                if (after is not { } a || utc - b.Utc > TimeSpan.FromSeconds(5) && a.Utc - utc > TimeSpan.FromSeconds(5)) {
+                    return utc - b.Utc <= TimeSpan.FromSeconds(5) ? (b.Enc0, b.Enc1) : null;
+                }
+                var f = (utc - b.Utc).TotalSeconds / (a.Utc - b.Utc).TotalSeconds;
+                return (b.Enc0 + f * Math.IEEERemainder(a.Enc0 - b.Enc0, 360), b.Enc1 + f * (a.Enc1 - b.Enc1));
+            }
+        }
+
         public async Task<OriginFrame> TakeFrame(double exposureSeconds, int iso, int binning, TimeSpan timeout, CancellationToken token = default) {
             await captureLock.WaitAsync(token);
             try {
+                var started = DateTime.UtcNow;
                 var frame = await CaptureOnce(exposureSeconds, iso, binning, timeout, token);
+                LastExposure = (started + TimeSpan.FromSeconds(exposureSeconds / 2), DateTime.UtcNow);
                 var mismatch = FrameSettingsMismatch(frame, exposureSeconds, iso);
                 if (frame.IsFits && mismatch == null) {
                     return frame;
                 }
                 Logger.Info($"Origin: asking again for a frame: {mismatch ?? $"got {frame.RemotePath} instead of a raw FITS"}");
                 await Task.Delay(RetryPause, token);
+                started = DateTime.UtcNow;
                 frame = await CaptureOnce(exposureSeconds, iso, binning, timeout, token);
+                LastExposure = (started + TimeSpan.FromSeconds(exposureSeconds / 2), DateTime.UtcNow);
                 mismatch = FrameSettingsMismatch(frame, exposureSeconds, iso);
                 if (mismatch != null) {
                     RecordEvent("frame_settings", mismatch);
