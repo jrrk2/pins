@@ -98,6 +98,9 @@ namespace NINA.Equipment.Equipment.Origin {
         private StreamWriter log;
         private long logBytes;
 
+        /// <summary>Where PI.N.S. keeps the Origin's files: the cable-neutral, the filter list, saved pointing models.</summary>
+        public string ConfigDirectory => Path.GetDirectoryName(filterFile);
+
         internal OriginBackend(string host, int port = DefaultPort, string logDirectory = null, string filterFile = null) {
             Host = host;
             Port = port;

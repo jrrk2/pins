@@ -155,8 +155,9 @@ namespace NINA.Test.Equipment.Origin {
         }
 
         [Test]
-        public void SlewTime_AllowsForBothAxesAndTheFinalSteps() {
-            OriginCalibration.SlewTime(120, 20).TotalSeconds.Should().BeApproximately(30 + 5 + 12, 1e-9);
+        public void SlewTime_AllowsForTheLongerAxisAndTheFinalSteps() {
+            OriginCalibration.SlewTime(120, 20).TotalSeconds.Should().BeApproximately(30 + 6, 1e-9, "both axes move at once");
+            OriginCalibration.SlewTime(10, 40).TotalSeconds.Should().BeApproximately(10 + 6, 1e-9);
             OriginCalibration.SlewTime(0, 0).Should().Be(TimeSpan.Zero, "already there");
         }
 

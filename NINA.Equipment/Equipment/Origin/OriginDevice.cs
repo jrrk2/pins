@@ -41,6 +41,9 @@ namespace NINA.Equipment.Equipment.Origin {
             this.filterFile = filterFile;
         }
 
+        /// <summary>The telescope's address.</summary>
+        public string Host => host;
+
         protected OriginBackend Backend { get; private set; }
 
         internal TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(2);

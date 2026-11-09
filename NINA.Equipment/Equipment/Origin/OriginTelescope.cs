@@ -56,8 +56,8 @@ namespace NINA.Equipment.Equipment.Origin {
         private const double ParkDecDegrees = 89.264;
 
         /// <summary>
-        /// Plate-solved points Unpark takes after a fake initialisation, to replace the firmware's invented frame with a real one: 1 (default) gives a level-base
-        /// model, 3 the quick calibration (about 2.5 minutes), 0 none (gotos then go to the right coordinates in the invented frame, not on the sky).
+        /// Set to 0, Unpark takes no plate solve after a fake initialisation (gotos then go to the right coordinates in the firmware's invented frame, not on the
+        /// sky). Otherwise it takes one, for a level-base model: Unpark only gates the mount. A fuller model is built with <see cref="ModelBuilder"/>.
         /// </summary>
         public const string UnparkPointsVariable = "UNPARK_ALIGN";
 
@@ -95,6 +95,8 @@ namespace NINA.Equipment.Equipment.Origin {
         // PI.N.S.'s own pointing (OriginCalibration), set up by Unpark after a fake initialisation and refined by every Sync. While it has a model, slews and the
         // reported position go by it rather than by the firmware's frame.
         private OriginCalibration calibration;
+        private readonly object unparkLock = new();
+        private Task unparking;
         private IOriginSky sky;
         private (double RaDegrees, double DecDegrees)? trackTarget;
         private DateTime trackUntil;
@@ -105,6 +107,50 @@ namespace NINA.Equipment.Equipment.Origin {
 
         public OriginTelescope(IProfileService profileService, string host, int port = OriginBackend.DefaultPort, string logDirectory = null, string filterFile = null) : base(host, port, logDirectory, filterFile) {
             this.profileService = profileService;
+            ModelBuilder = new OriginModelBuilder(this);
+        }
+
+        /// <summary>The Origin mount last connected, for the model builder screens (which check <see cref="OriginDevice.Connected"/>); null before any.</summary>
+        public static OriginTelescope Current { get; private set; }
+
+        /// <summary>Builds PI.N.S.'s pointing model from many plate-solved points: Touch-N-Stars' model builder screens.</summary>
+        public OriginModelBuilder ModelBuilder { get; }
+
+        protected override Task OnConnecting(CancellationToken token) {
+            Current = this;
+            return base.OnConnecting(token);
+        }
+
+        protected override void OnDisconnecting() {
+            ModelBuilder.Cancel();
+            base.OnDisconnecting();
+        }
+
+        // ── for OriginModelBuilder ──
+
+        /// <summary>PI.N.S.'s pointing, set up by Unpark; null before it.</summary>
+        internal OriginCalibration Calibration => calibration;
+
+        internal OriginBackend Link => Backend;
+
+        internal void RefuseToMoveInDaylight(string what) => RefuseInDaylight(what);
+
+        /// <summary>Stops a track and any motion before a model build moves the mount itself.</summary>
+        internal async Task StopForModelBuild(CancellationToken token) {
+            trackTarget = null;
+            parkedAtPolaris = false;
+            if (Backend is { } backend) {
+                await backend.AbortMotion(token);
+            }
+        }
+
+        /// <summary>A model build moved the mount: frames from before show somewhere else.</summary>
+        internal void MovedByModelBuild() => lastMoveUtc = DateTime.UtcNow;
+
+        private void ThrowIfModelBuilding(string what) {
+            if (ModelBuilder.BuildInProgress) {
+                throw new InvalidOperationException($"{Name}: not {what} while a pointing model is being built; stop the build first");
+            }
         }
 
         // After a goto the task controller can still say IDLE for a moment before the centring starts.
@@ -301,7 +347,8 @@ namespace NINA.Equipment.Equipment.Origin {
         public bool HasUnknownEpoch => false;
         public Coordinates TargetCoordinates => targetCoordinates;
         public PierSide? TargetSideOfPier => null;
-        public bool Slewing => slewInProgress || !gotoOver;
+        // a model build moves the mount from point to point: N.I.N.A. and Touch-N-Stars hold back their own moves and syncs meanwhile
+        public bool Slewing => slewInProgress || !gotoOver || ModelBuilder.BuildInProgress;
         public double GuideRateRightAscensionArcsecPerSec => 0;
         public double GuideRateDeclinationArcsecPerSec => 0;
         public bool CanMovePrimaryAxis => true;
@@ -332,6 +379,7 @@ namespace NINA.Equipment.Equipment.Origin {
             var firmwareRate = FirmwareRate(rate);
             if (firmwareRate != 0) {
                 RefuseInDaylight("moving");
+                ThrowIfModelBuilding("moving");
             }
             if (axis == TelescopeAxes.Primary && !backend.CordWrap.CanMove(Math.Sign(firmwareRate), OriginCordWrap.MarginFor(firmwareRate))) {
                 throw new InvalidOperationException($"{Name}: the azimuth is {backend.CordWrap.Turned:0} degrees from where the cables hang straight; turn the other way");
@@ -383,6 +431,7 @@ namespace NINA.Equipment.Equipment.Origin {
                 throw new InvalidOperationException($"{Name} is not initialised: unpark it first (the mount homes and aligns on the stars)");
             }
             RefuseInDaylight("slewing");
+            ThrowIfModelBuilding("slewing");
 
             var j2000 = coordinates.Transform(Epoch.J2000);
             targetCoordinates = j2000;
@@ -428,6 +477,7 @@ namespace NINA.Equipment.Equipment.Origin {
             var backend = Backend ?? throw new OriginException($"{Name} is not connected");
             stopRequested = true;
             trackTarget = null;
+            ModelBuilder.Cancel();
             lock (axisRates) {
                 Array.Clear(axisRates);
             }
@@ -483,6 +533,7 @@ namespace NINA.Equipment.Equipment.Origin {
         public async Task Park(CancellationToken token) {
             var backend = Backend ?? throw new OriginException($"{Name} is not connected");
             RefuseInDaylight("parking");
+            ThrowIfModelBuilding("parking");
             if (calibration?.Model == null && !firmwareAligned && FakeInitialize) {
                 // no plate solve yet: where north is, and so the pole, is not known; the mount already reports parked
                 Logger.Warning($"{Name}: no plate solve yet, so the celestial pole cannot be found to park on; leaving the tube where it is");
@@ -523,6 +574,27 @@ namespace NINA.Equipment.Equipment.Origin {
             trackUntil = DateTime.UtcNow + TrackLength;
         }
 
+        /// <summary>
+        /// The altitude, by the tilt sensor, for Unpark's plate solve. Where the tube happens to stop it could be looking at a tree or a wall; 60 degrees clears
+        /// them, and is far enough from the zenith for one solve to fix the azimuth well.
+        /// </summary>
+        internal const double UnparkSolveAltitude = 60;
+
+        // Raised by the tilt sensor if low; lowered by the altitude encoder if well above. Without a tilt reading the solve is taken where the tube points.
+        private async Task PointUpForUnparkSolve(OriginBackend backend, CancellationToken token) {
+            try {
+                var altitude = await backend.RaiseTube(UnparkSolveAltitude, token: token);
+                if (altitude > UnparkSolveAltitude + 3) {
+                    var (enc0, enc1) = await calibration.Encoders(token);
+                    await calibration.MoveTo(enc0, enc1 - (altitude - UnparkSolveAltitude), token);
+                }
+                lastMoveUtc = DateTime.UtcNow;
+                Logger.Info($"{Name}: the tube at {backend.Data.Orientation.Altitude:0} degrees altitude for Unpark's plate solve");
+            } catch (OriginException ex) {
+                Logger.Warning($"{Name}: could not bring the tube to {UnparkSolveAltitude:0} degrees ({ex.Message}); plate solving where it points");
+            }
+        }
+
         // After a fake initialisation: plate-solved points where PI.N.S. chooses, so that gotos land on the sky and not in the firmware's invented frame.
         private async Task AlignFromPlateSolves(OriginBackend backend, double latitude, double longitude, double elevation, CancellationToken token) {
             if (UnparkPoints <= 0) {
@@ -532,11 +604,8 @@ namespace NINA.Equipment.Equipment.Origin {
             sky = SofaOriginSky.ForOrigin(backend, latitude, longitude, elevation);
             calibration = new OriginCalibration(backend, sky, Solve, new SofaOriginSky(latitude, longitude, elevation));
             try {
-                if (UnparkPoints >= 3) {
-                    await calibration.Calibrate(new (double, double)[] { (-120, 3.5), (0, 18.5), (120, 3.5) }, token: token);
-                } else {
-                    calibration.Refine(await calibration.Measure(2, 800, token));
-                }
+                await PointUpForUnparkSolve(backend, token);
+                calibration.Refine(await calibration.Measure(2, 800, token));
             } catch (OriginException ex) {
                 Logger.Error($"{Name}: could not plate solve during Unpark ({ex.Message}); gotos use the firmware's invented frame until a plate solve and sync");
             }
@@ -552,7 +621,20 @@ namespace NINA.Equipment.Equipment.Origin {
         /// mount homes and aligns on the stars, which takes minutes and needs a clear sky. With ORIGIN_FAKE_INIT the firmware's alignment is skipped and PI.N.S. takes its own
         /// plate solves instead (<see cref="UnparkPointsVariable"/>). The site comes from the profile, and an unset site is refused rather than aligning for the wrong place.
         /// </summary>
-        public async Task Unpark(CancellationToken token) {
+        public Task Unpark(CancellationToken token) {
+            // A second Unpark while one runs (the web page shows no progress, and a press can seem lost) waits for the first and gets its result: two at once
+            // drove the mount to each other's points and spoiled both (2026-11-09, three presses).
+            lock (unparkLock) {
+                if (unparking is { IsCompleted: false }) {
+                    Logger.Info($"{Name}: Unpark is already running; waiting for it");
+                    return unparking;
+                }
+                ThrowIfModelBuilding("unparking");
+                return unparking = UnparkOnce(token);
+            }
+        }
+
+        private async Task UnparkOnce(CancellationToken token) {
             var backend = Backend ?? throw new OriginException($"{Name} is not connected");
             RefuseInDaylight("unparking");
             var site = profileService.ActiveProfile.AstrometrySettings;

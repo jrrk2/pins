@@ -77,37 +77,41 @@ namespace NINA.Equipment.Equipment.Origin {
         }
 
         /// <summary>
-        /// Moves both axes to these encoder readings by relative moves under encoder feedback. Azimuth goes the long way round when the short one would cross
-        /// the far side of cable-neutral; a target beyond the limit is refused.
+        /// Moves both axes to these encoder readings by relative moves under encoder feedback, both axes at once. Azimuth goes the long way round when the short
+        /// one would cross the far side of cable-neutral; a target beyond the limit is refused.
         /// </summary>
         public async Task MoveTo(double enc0, double enc1, CancellationToken token = default) {
             var wrap = backend.CordWrap;
             await Encoders(token);
-            var target = wrap.TurnedFor(enc0);
-            await Drive(isAltitude: true, async () => (await Encoders(token)).Enc1, enc1, token);
-            await Drive(isAltitude: false, async () => { await Encoders(token); return wrap.Turned; }, target, token);
-        }
-
-        private async Task Drive(bool isAltitude, Func<Task<double>> read, double target, CancellationToken token) {
+            var target0 = wrap.TurnedFor(enc0);
             for (var attempt = 0; attempt < 10; attempt++) {
-                var error = target - await read();
-                if (Math.Abs(error) < Tolerance) {
+                var (_, now1) = await Encoders(token);
+                var alt = Step(enc1 - now1);
+                var az = Step(target0 - wrap.Turned);
+                if (alt == null && az == null) {
                     return;
                 }
-                var step = ladder.First(l => Math.Abs(error) > l.Above || l.Rate == 6);
-                var sign = Math.Sign(error);
-                if (!isAltitude && !backend.CordWrap.CanMove(sign)) {
-                    throw new OriginException($"Azimuth is {backend.CordWrap.Turned:0} degrees from cable-neutral: not turning further");
+                if (az is var (azRate, _) && !wrap.CanMove(Math.Sign(azRate))) {
+                    throw new OriginException($"Azimuth is {wrap.Turned:0} degrees from cable-neutral: not turning further");
                 }
-                await backend.SlewRates(isAltitude ? sign * step.Rate : 0, isAltitude ? 0 : sign * step.Rate, token: token);
+                var altRate = alt?.Rate ?? 0;
+                var azmRate = az?.Rate ?? 0;
+                var started = DateTime.UtcNow;
+                var altEnd = started + TimeSpan.FromSeconds(alt?.Seconds ?? 0);
+                var azEnd = started + TimeSpan.FromSeconds(az?.Seconds ?? 0);
+                await backend.SlewRates(altRate, azmRate, token: token);
                 try {
-                    var seconds = Math.Max(0.15, Math.Abs(error) / step.Speed - (step.Rate >= 8 ? 0.8 : 0));
-                    var end = DateTime.UtcNow + TimeSpan.FromSeconds(seconds);
-                    while (DateTime.UtcNow < end) {
+                    // each axis stops when its time is up; the other carries on
+                    while (altRate != 0 || azmRate != 0) {
                         await Task.Delay(100, token);
+                        var now = DateTime.UtcNow;
+                        var stopAlt = altRate != 0 && now >= altEnd;
                         // stop only a move outward past the limit: after a track that carried on past it, the way back starts out there
-                        if (!isAltitude && backend.CordWrap.Turned * sign > backend.CordWrap.Limit) {
-                            break;
+                        var stopAz = azmRate != 0 && (now >= azEnd || wrap.Turned * Math.Sign(azmRate) > wrap.Limit);
+                        if (stopAlt || stopAz) {
+                            altRate = stopAlt ? 0 : altRate;
+                            azmRate = stopAz ? 0 : azmRate;
+                            await backend.SlewRates(altRate, azmRate, token: token);
                         }
                     }
                 } finally {
@@ -118,7 +122,18 @@ namespace NINA.Equipment.Equipment.Origin {
                 }
                 await Task.Delay(SettleTime, token);
             }
-            throw new OriginException($"The {(isAltitude ? "altitude" : "azimuth")} did not reach {target:0.00}");
+            var (_, last1) = await Encoders(token);
+            throw new OriginException($"The mount did not reach azimuth {target0:0.00} and altitude {enc1:0.00} from cable-neutral (it is at {wrap.Turned:0.00} and {last1:0.00})");
+        }
+
+        /// <summary>The signed rate and how long to run it to close this error, degrees, or null within the tolerance.</summary>
+        private (int Rate, double Seconds)? Step(double error) {
+            if (Math.Abs(error) < Tolerance) {
+                return null;
+            }
+            var step = ladder.First(l => Math.Abs(error) > l.Above || l.Rate == 6);
+            // the fast rates take about 0.8 s to stop
+            return (Math.Sign(error) * step.Rate, Math.Max(0.15, Math.Abs(error) / step.Speed - (step.Rate >= 8 ? 0.8 : 0)));
         }
 
         /// <summary>A frame here, plate solved: a calibration point, or null if it did not solve. The encoders are read after the frame, the mount being still.</summary>
@@ -128,7 +143,7 @@ namespace NINA.Equipment.Equipment.Origin {
         /// Takes the frame and reads the encoders, and returns the plate solve still to do, so that it can run while the mount moves on: the solve is the slow part
         /// (10-30 s against a few seconds for the frame) and needs nothing from the mount.
         /// </summary>
-        private async Task<Func<CancellationToken, Task<OriginCalibrationPoint>>> Capture(double exposure, int iso, CancellationToken token) {
+        internal async Task<Func<CancellationToken, Task<OriginCalibrationPoint>>> Capture(double exposure, int iso, CancellationToken token) {
             var taken = DateTime.UtcNow;
             var frame = await backend.TakeFrame(exposure, iso, 1, TimeSpan.FromSeconds(exposure + 60), token);
             var midExposure = taken + TimeSpan.FromSeconds(exposure / 2);
@@ -246,6 +261,34 @@ namespace NINA.Equipment.Equipment.Origin {
             return error;
         }
 
+        /// <summary>Takes a point out, such as the worst-fitting one, and refits.</summary>
+        public void Remove(OriginCalibrationPoint point) {
+            if (Points.Remove(point)) {
+                Refit();
+            }
+        }
+
+        /// <summary>Replaces every point, such as with a saved model's, and refits.</summary>
+        public void Load(IEnumerable<OriginCalibrationPoint> points) {
+            var loaded = points.ToList();
+            Points.Clear();
+            Points.AddRange(loaded);
+            Refit();
+        }
+
+        /// <summary>Drops every point and the model: the mount waits for a plate solve again.</summary>
+        public void Clear() {
+            Points.Clear();
+            Model = null;
+            LocalCorrection = null;
+        }
+
+        // the fit from three points, below that the level-base model from the newest, as Refine does
+        private void Refit() {
+            LocalCorrection = null;
+            Model = Points.Count >= 3 ? OriginPointingModel.Fit(Points) : Points.Count > 0 ? OriginPointingModel.Level(new[] { Points[^1] }) : null;
+        }
+
         /// <summary>A goto with the model, a frame there to check it, and that frame's solve added to the model. Returns the goto's pointing error, arcminutes, or null.</summary>
         public async Task<double?> GotoAndRefine(double raDegrees, double decDegrees, double exposure = 2, int iso = 800, CancellationToken token = default) {
             await Goto(raDegrees, decDegrees, token);
@@ -278,11 +321,12 @@ namespace NINA.Equipment.Equipment.Origin {
         }
 
         /// <summary>
-        /// About how long a move takes: the axes go one after the other, each at up to 4 degrees a second, with a few seconds of finer steps at the end
-        /// (measured on OriginSimulator at the real speeds, 2026-11-09).
+        /// About how long a move takes: both axes at once, each at up to 4 degrees a second, with a few seconds of finer steps at the end.
         /// </summary>
-        internal static TimeSpan SlewTime(double azimuthDegrees, double altitudeDegrees) =>
-            TimeSpan.FromSeconds(azimuthDegrees / 4.0 + altitudeDegrees / 4.0 + (azimuthDegrees > 0.05 ? 6 : 0) + (altitudeDegrees > 0.05 ? 6 : 0));
+        internal static TimeSpan SlewTime(double azimuthDegrees, double altitudeDegrees) {
+            var longer = Math.Max(azimuthDegrees, altitudeDegrees);
+            return TimeSpan.FromSeconds(longer > 0.05 ? longer / 4.0 + 6 : 0);
+        }
 
         /// <summary>
         /// The track that keeps a J2000 position in view, in the firmware's frame: for each time the model's encoder readings, plus the firmware's offsets
