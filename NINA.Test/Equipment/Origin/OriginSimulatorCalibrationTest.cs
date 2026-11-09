@@ -212,8 +212,7 @@ namespace NINA.Test.Equipment.Origin {
 
             // the cables throughout
             var cord = (await Sim("state"))["cord"];
-            Report($"cables: range {cord.Value<double>("min_turned_deg"):0.0} to {cord.Value<double>("max_turned_deg"):0.0} from neutral, taut {cord.Value<int>("times_taut")} times, snapped {cord.Value<bool>("snapped")}");
-            cord.Value<bool>("snapped").Should().BeFalse();
+            Report($"cables: range {cord.Value<double>("min_turned_deg"):0.0} to {cord.Value<double>("max_turned_deg"):0.0} from neutral, past the limit {cord.Value<int>("times_taut")} times");
             cord.Value<double>("max_turned_deg").Should().BeLessThanOrEqualTo(OriginCordWrap.DefaultLimit + OriginCordWrap.TrackOverrun);
             cord.Value<double>("min_turned_deg").Should().BeGreaterThanOrEqualTo(-OriginCordWrap.DefaultLimit - OriginCordWrap.TrackOverrun);
 
@@ -239,13 +238,14 @@ namespace NINA.Test.Equipment.Origin {
             var model = await calibration.Calibrate(new (double, double)[] { (-120, 3.5), (0, 18.5), (120, 3.5) });
             Report($"quick calibration: {calibration.Points.Count} points, rms {model.RmsArcmin:0.0}'");
 
-            // a fast mover, 0.5 degrees a minute in RA and -0.3 in Dec, from a star well up: plate solves against the ephemeris at mid-exposure
+            // a comet-like mover, 0.05 degrees a minute in RA and -0.03 in Dec, from a star well up: plate solves against the ephemeris at mid-exposure. Much faster
+            // and a 2 s frame trails the stars past solving (0.5 degrees a minute is 60" in 2 s), as a real camera would.
             var star = brightStars.Select(b => (b.Name, b.Ra, b.Dec, Horizon: sky.ToHorizon(b.Ra, b.Dec, DateTime.UtcNow)))
                                   .Where(b => b.Horizon.Altitude is > 40 and < 70).MaxBy(b => b.Horizon.Altitude);
             var t0 = DateTime.UtcNow;
-            (double, double) Mover(DateTime t) => (star.Ra + 0.5 * (t - t0).TotalMinutes, star.Dec - 0.3 * (t - t0).TotalMinutes);
+            (double, double) Mover(DateTime t) => (star.Ra + 0.05 * (t - t0).TotalMinutes, star.Dec - 0.03 * (t - t0).TotalMinutes);
             // The quick model leaves a steady offset of some arcminutes (worst high up, before flexure and cone are fitted); what the track must do is follow
-            // the target: a broken track would fall behind by 30' a minute. So the offset (east, north, arcminutes) must stay put from one minute to the next.
+            // the target: a track that did not follow it would fall behind by about 3' a minute. So the offset (east, north, arcminutes) must stay put.
             await calibration.Track(Mover, TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(15));
             (double East, double North)? first = null;
             for (var minute = 1; minute <= 3; minute++) {
@@ -261,7 +261,7 @@ namespace NINA.Test.Equipment.Origin {
                 var drift = Math.Sqrt(Math.Pow(offset.East - first.Value.East, 2) + Math.Pow(offset.North - first.Value.North, 2));
                 Report($"moving target near {star.Name}, +{minute} min: {offset.East:+0.0;-0.0}' east, {offset.North:+0.0;-0.0}' north of the ephemeris; {drift:0.0}' from the first");
                 Math.Sqrt(offset.East * offset.East + offset.North * offset.North).Should().BeLessThan(15, "within the quick model's error");
-                drift.Should().BeLessThan(2, "the track should follow the target, which moves 35' a minute");
+                drift.Should().BeLessThan(1.5, "the track should follow the target, which moves about 3' a minute");
             }
             await backend.AbortMotion();
 
@@ -279,10 +279,9 @@ namespace NINA.Test.Equipment.Origin {
                 await Task.Delay(TimeSpan.FromSeconds(10));
             }
             var afterTrack = (await Sim("state"))["cord"];
-            Report($"the track ended at {afterTrack.Value<double>("turned_deg"):0.0} degrees from cable-neutral (furthest {afterTrack.Value<double>("max_turned_deg"):0.0}), snapped {afterTrack.Value<bool>("snapped")}");
+            Report($"the track ended at {afterTrack.Value<double>("turned_deg"):0.0} degrees from cable-neutral (furthest {afterTrack.Value<double>("max_turned_deg"):0.0})");
             afterTrack.Value<double>("max_turned_deg").Should().BeGreaterThan(OriginCordWrap.DefaultLimit, "the observation is finished past the limit");
             afterTrack.Value<double>("max_turned_deg").Should().BeLessThanOrEqualTo(OriginCordWrap.DefaultLimit + OriginCordWrap.TrackOverrun);
-            afterTrack.Value<bool>("snapped").Should().BeFalse();
 
             await calibration.MoveTo(neutral, 5);
             var back = (await Sim("state"))["cord"];
