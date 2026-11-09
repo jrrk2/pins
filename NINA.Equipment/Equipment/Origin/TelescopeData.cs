@@ -131,6 +131,9 @@ namespace NINA.Equipment.Equipment.Origin {
         public string CurrentStep { get; internal set; }
         public string ImagingName { get; internal set; }
         public bool IsReady { get; internal set; }
+
+        /// <summary>Whether any message has carried IsReady, so that a false value means not ready rather than not yet heard.</summary>
+        public bool IsReadyReported { get; internal set; }
         public int NumPoints { get; internal set; }
         public int FocusPosition { get; internal set; }
         public int PercentageComplete { get; internal set; }
@@ -327,6 +330,7 @@ namespace NINA.Equipment.Equipment.Origin {
             t.State = Get(o, "State", t.State);
             t.Stage = Get(o, "Stage", t.Stage);
             t.IsReady = Get(o, "IsReady", t.IsReady);
+            t.IsReadyReported |= o.ContainsKey("IsReady");
             t.CurrentStep = Get(o, "ErrorMessage", t.CurrentStep);
             if (o["InitializationInfo"] is JObject init) {
                 t.CurrentStep = Get(init, "CurrentStep", t.CurrentStep);

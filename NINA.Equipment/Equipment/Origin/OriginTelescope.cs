@@ -93,9 +93,23 @@ namespace NINA.Equipment.Equipment.Origin {
             }
             mount = Backend.Data.Mount;
             RaisePropertyChanged(nameof(Slewing));
+            int azimuthRate;
+            lock (axisRates) {
+                azimuthRate = axisRates[1];
+            }
+            // Polls come every 2 s and the axis coasts after a stop: the margin grows with the speed.
+            if (azimuthRate != 0 && !Backend.CordWrap.CanMove(Math.Sign(azimuthRate), OriginCordWrap.MarginFor(azimuthRate))) {
+                Logger.Warning($"{Name}: stopping the azimuth {Backend.CordWrap.Turned:0} degrees from cable-neutral");
+                lock (axisRates) {
+                    axisRates[1] = 0;
+                }
+                await Backend.SlewRates(axisRates[0], 0, token: token);
+            }
         }
 
-        private bool aligned => mount.IsAligned;
+        // IsAligned is not enough: after a failed second plate solve the mount says aligned with one reference, and the firmware still refuses gotos
+        // (-5 "not yet initialized", 2026-11-08). TaskController's IsReady decided all 57 gotos in the logs, whatever the number of references.
+        private bool aligned => mount.IsAligned && (Backend?.Data.TaskController is not { IsReadyReported: true } task || task.IsReady);
         private bool gotoOver => mount.IsGotoOver;
         private bool tracking => mount.IsTracking;
         private double raRadians => mount.Ra;
@@ -202,6 +216,9 @@ namespace NINA.Equipment.Equipment.Origin {
                 throw new InvalidOperationException($"{Name} is in a goto: stop it first");
             }
             var firmwareRate = FirmwareRate(rate);
+            if (axis == TelescopeAxes.Primary && !backend.CordWrap.CanMove(Math.Sign(firmwareRate), OriginCordWrap.MarginFor(firmwareRate))) {
+                throw new InvalidOperationException($"{Name}: the azimuth is {backend.CordWrap.Turned:0} degrees from where the cables hang straight; turn the other way");
+            }
             int alt, azm;
             lock (axisRates) {
                 axisRates[axis == TelescopeAxes.Secondary ? 0 : 1] = firmwareRate;
@@ -315,7 +332,18 @@ namespace NINA.Equipment.Equipment.Origin {
             }
             // Without a link to the zone database .NET calls the local zone "Local", which the telescope would not know.
             var zone = TimeZoneInfo.Local.Id == "Local" ? "UTC" : TimeZoneInfo.Local.Id;
-            await backend.Initialize(site.Latitude, site.Longitude, zone, fake, InitializeTimeout, token);
+            // The alignment adds its references from the live stream: with it off, which PI.N.S. keeps it for captures, a reference fails with
+            // -53 "Can't add alignment reference" (2026-11-08, with 53 stars in view). It is turned on only for the initialisation.
+            if (!fake) {
+                backend.SetLiveStreamDisabled(false);
+            }
+            try {
+                await backend.Initialize(site.Latitude, site.Longitude, zone, fake, InitializeTimeout, token);
+            } finally {
+                if (!fake) {
+                    backend.SetLiveStreamDisabled(true);
+                }
+            }
             parkedAtPolaris = false;
             await Poll(token);
             if (fake) {

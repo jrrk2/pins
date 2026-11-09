@@ -61,6 +61,15 @@
     <Compile Remove="ViewModel\DockManagerVMTest.cs" />
   </ItemGroup>
   <ItemGroup>
+    <!-- SOFA and NOVAS for the astrometry under test, where NINA.Core's DllLoader and NINA.Astrometry's resolver look for them (External/<platform>), as the app ships them -->
+    <None Include="..\NINA\External\linux-x64\SOFA\libsofa_c.so" Link="External\linux-x64\SOFA\libsofa_c.so" Condition="Exists('..\NINA\External\linux-x64\SOFA\libsofa_c.so')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\NINA\External\linux-x64\NOVAS\libnovas_c.so" Link="External\linux-x64\NOVAS\libnovas_c.so" Condition="Exists('..\NINA\External\linux-x64\NOVAS\libnovas_c.so')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
     <EmbeddedResource Include="..\NINA.Sequencer\Editing\UI-COVERAGE.md" LogicalName="SequenceEditorCoverage" />
     <None Update="AstrometryTest\HorizonData\commas.hrz">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

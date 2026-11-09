@@ -103,7 +103,11 @@ namespace NINA.Equipment.Equipment.Origin {
             Port = port;
             this.logDirectory = logDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Documents", "CelestronOriginLogs");
             this.filterFile = filterFile ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "origin", "filter");
+            CordWrap = new OriginCordWrap(Path.Combine(Path.GetDirectoryName(this.filterFile), "cordwrap.json"));
         }
+
+        /// <summary>The azimuth turned from where the cables hang straight, followed from every mount status.</summary>
+        public OriginCordWrap CordWrap { get; }
 
         public string Host { get; }
         public int Port { get; }
@@ -520,6 +524,9 @@ namespace NINA.Equipment.Equipment.Origin {
 
             ReportErrors(message, source, command, type);
             Data.Process(message);
+            if (source == "Mount" && message["Enc0"] is { Type: JTokenType.Float or JTokenType.Integer } enc0) {
+                CordWrap.Update(enc0.Value<double>());
+            }
             last[$"{source}/{command}"] = message;
             if (source == "TaskController" && !string.IsNullOrEmpty(message.Value<string>("ErrorMessage"))) {
                 lock (stateLock) {

@@ -1017,6 +1017,31 @@ namespace NINA.Test.Equipment.Origin {
         }
 
         [Test]
+        public async Task Mount_AlignedButNotReadyIsParkedAndUnparkInitialises() {
+            // 2026-11-08: IsAligned with one reference after a failed initialisation, IsReady false, and gotos refused with -5.
+            telescope.MountStatus = new JObject { ["IsAligned"] = true, ["IsGotoOver"] = true, ["NumAlignRefs"] = 1 };
+            var mount = NewTelescope();
+            await mount.Connect(default);
+            await PushTaskState("IDLE", extra: new JObject { ["IsReady"] = false });
+            await WaitFor(() => mount.AtPark);
+            mount.AtPark.Should().BeTrue();
+            var slew = () => mount.SlewToCoordinates(new Coordinates(Angle.ByHours(1), Angle.ByDegree(10), Epoch.J2000), default);
+            await slew.Should().ThrowAsync<InvalidOperationException>();
+            telescope.Handlers["RunInitialize"] = command => {
+                _ = PushTaskState("INITIALIZING", sequence: 1).ContinueWith(_ => PushTaskState("IDLE", sequence: 2, extra: new JObject { ["IsReady"] = true }));
+                return new JObject { ["ErrorCode"] = 0 };
+            };
+
+            await mount.Unpark(default);
+
+            telescope.Count("RunInitialize").Should().Be(1);
+            mount.AtPark.Should().BeFalse();
+            var live = telescope.Received.Where(m => m.Value<string>("Command") is "SetDisableLiveStream" or "RunInitialize").Select(m => m.Value<string>("Command") == "RunInitialize" ? "init" : m.Value<bool>("Disable") ? "off" : "on").ToList();
+            live.Should().ContainInOrder("on", "init", "off");
+            mount.Disconnect();
+        }
+
+        [Test]
         public async Task Mount_UnparkInitialisesAnUnalignedMount() {
             telescope.MountStatus = new JObject { ["IsAligned"] = false, ["IsGotoOver"] = true };
             var mount = NewTelescope();
