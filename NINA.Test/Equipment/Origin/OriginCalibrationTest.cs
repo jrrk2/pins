@@ -177,6 +177,28 @@ namespace NINA.Test.Equipment.Origin {
         }
 
         [Test]
+        public void Aim_LandsOnTheLastSyncedPointWhateverTheModelLacks() {
+            // the 2026-11-08 mount has flexure; four points fit without it, so the model misses; a sync's local correction makes up for it there
+            var truth = TrueModel();
+            var all = Points(truth, 0);
+            var calibration = Offline();
+            foreach (var p in all.Take(4)) {
+                calibration.Refine(p);
+            }
+            var synced = all[3];
+            calibration.Model.ResidualArcmin(synced).Should().BeGreaterThan(0.5, "without flexure the model misses this point");
+
+            var (enc0, enc1) = calibration.Aim(synced.Altitude, synced.Azimuth);
+            var landed = truth.ToSky(enc0, enc1);
+
+            var u = OriginPointingModel.Vector(landed.Altitude, landed.Azimuth);
+            var v = OriginPointingModel.Vector(synced.Altitude, synced.Azimuth);
+            (Math.Acos(Math.Clamp(u[0] * v[0] + u[1] * v[1] + u[2] * v[2], -1, 1)) * 180 / Math.PI * 60).Should().BeLessThan(0.1, "a slew back to the synced target lands on it");
+            var far = all[0];
+            calibration.Aim(far.Altitude, far.Azimuth).Should().Be(calibration.Model.ToEncoders(far.Altitude, far.Azimuth), "far from the sync, the model alone");
+        }
+
+        [Test]
         public void Fit_NeedsThreePoints() {
             var points = Points(TrueModel(), 0);
 

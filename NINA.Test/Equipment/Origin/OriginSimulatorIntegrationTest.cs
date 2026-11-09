@@ -65,12 +65,13 @@ namespace NINA.Test.Equipment.Origin {
             }
         }
 
-        private OriginTelescope NewMount() => new(profile.Object, host, port, Path.Combine(workDirectory, "logs"), Path.Combine(workDirectory, "filter")) { SettleGrace = TimeSpan.Zero, AllowDaylight = true };
+        private OriginTelescope NewMount() => new(profile.Object, host, port, Path.Combine(workDirectory, "logs"), Path.Combine(workDirectory, "filter")) { SettleGrace = TimeSpan.Zero, AllowDaylight = true, FakeInitialize = true, UnparkPoints = 0 };      // a quick fake initialisation, no plate solve
 
         [Test]
         public async Task Mount_SlewsAndReportsTheNewPosition() {
             var mount = NewMount();
             (await mount.Connect(default)).Should().BeTrue();
+            await mount.Unpark(default);                // the simulator starts uninitialised
             mount.AtPark.Should().BeFalse();
 
             (await mount.SlewToCoordinates(new Coordinates(Angle.ByHours(13.5), Angle.ByDegree(47), Epoch.J2000), default)).Should().BeTrue();
@@ -86,6 +87,7 @@ namespace NINA.Test.Equipment.Origin {
         public async Task Mount_StopWhileSlewingEndsTheSlewWithoutArriving() {
             var mount = NewMount();
             await mount.Connect(default);
+            await mount.Unpark(default);
             var slew = mount.SlewToCoordinates(new Coordinates(Angle.ByHours(2), Angle.ByDegree(10), Epoch.J2000), default);
             await Task.Delay(TimeSpan.FromSeconds(1));
 

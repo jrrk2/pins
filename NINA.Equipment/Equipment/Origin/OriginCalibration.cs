@@ -178,6 +178,31 @@ namespace NINA.Equipment.Equipment.Origin {
             return Model;
         }
 
+        /// <summary>
+        /// The correction at the last synced point: where the tube really pointed there, less where the model says, as altitude and azimuth offsets. A sync usually
+        /// comes from centring, which slews to the same target again; between syncs at one place the model gains no point (the newer replaces the older) and may
+        /// lack a term the mount needs (flexure from 5 points, cone from 6: 8' out on a mount with strong flexure, OriginSimulator 2026-11-09), so centring would
+        /// never converge. Mount firmware does the same: the model, plus a local offset from the last sync.
+        /// </summary>
+        public (double Altitude, double Azimuth, double DeltaAltitude, double DeltaAzimuth)? LocalCorrection { get; private set; }
+
+        /// <summary>Within this distance of the last sync the local correction applies in full, fading to nothing at <see cref="LocalCorrectionFade"/>, degrees.</summary>
+        public const double LocalCorrectionFull = 5, LocalCorrectionFade = 15;
+
+        /// <summary>The encoders that point the tube at this true altitude and azimuth: the model, with the local correction near the last synced point.</summary>
+        public (double Enc0, double Enc1) Aim(double altitude, double azimuth) {
+            var model = Model ?? throw new InvalidOperationException("Not calibrated");
+            if (LocalCorrection is not var (a, z, da, dz)) {
+                return model.ToEncoders(altitude, azimuth);
+            }
+            var u = OriginPointingModel.Vector(altitude, azimuth);
+            var v = OriginPointingModel.Vector(a, z);
+            var separation = OriginPointingModel.Deg(Math.Acos(Math.Clamp(u[0] * v[0] + u[1] * v[1] + u[2] * v[2], -1, 1)));
+            var weight = separation <= LocalCorrectionFull ? 1 : separation >= LocalCorrectionFade ? 0 : (LocalCorrectionFade - separation) / (LocalCorrectionFade - LocalCorrectionFull);
+            // the tube lands where the model says plus the correction, so aim the model at the target less the correction
+            return model.ToEncoders(altitude - weight * da, OriginPointingModel.Norm360(azimuth - weight * dz));
+        }
+
         /// <summary>A point further than this from the model, degrees, is a bad solve or a sign that the mechanics moved (a slipping clutch, a knock): it is not added.</summary>
         public const double RefineRejectDegrees = 3;
 
@@ -201,6 +226,7 @@ namespace NINA.Equipment.Equipment.Origin {
             }
             Points.RemoveAll(p => Separation(p, point) < RefineSamePlaceDegrees);
             Points.Add(point);
+            LocalCorrection = null;
             if (Points.Count >= 3) {
                 Model = OriginPointingModel.Fit(Points);
                 Logger.Info($"Origin calibration: refined with a point {error:0.0} arcmin out, now {Points.Count} points, rms {Model.RmsArcmin:0.0} arcmin{(Points.Count >= OriginPointingModel.PointsForFlexure ? $", flexure {Model.Flexure:0.00}" : "")}");
@@ -209,6 +235,13 @@ namespace NINA.Equipment.Equipment.Origin {
                 // 2026-11-09), and centring expects a slew back to where it synced to land there. The older point waits for the fit.
                 Model = OriginPointingModel.Level(new[] { point });
                 Logger.Info($"Origin calibration: {Points.Count} point{(Points.Count == 1 ? "" : "s")}; a level-base model from the newest until there are three");
+            }
+            // what the new model still misses at this point, for targets near it (the level model from this point misses nothing here)
+            var (modelAlt, modelAz) = Model.ToSky(point.Enc0, point.Enc1);
+            var missAlt = point.Altitude - modelAlt;
+            var missAz = Math.IEEERemainder(point.Azimuth - modelAz, 360);
+            if (Math.Abs(missAlt) > 1e-6 || Math.Abs(missAz) > 1e-6) {
+                LocalCorrection = (point.Altitude, point.Azimuth, missAlt, missAz);
             }
             return error;
         }
@@ -235,11 +268,11 @@ namespace NINA.Equipment.Equipment.Origin {
             if (alt < 20) {
                 throw new OriginException($"The target is at {alt:0} degrees: below 20");
             }
-            var (enc0, enc1) = model.ToEncoders(alt, az);
+            var (enc0, enc1) = Aim(alt, az);
             var arrival = SlewTime(Math.Abs(backend.CordWrap.TurnedFor(enc0) - backend.CordWrap.Turned), Math.Abs(enc1 - now1));
             foreach (var lead in new[] { arrival, TimeSpan.FromSeconds(3) }) {
                 (alt, az) = sky.ToHorizon(raDegrees, decDegrees, DateTime.UtcNow + lead);
-                (enc0, enc1) = model.ToEncoders(alt, az);
+                (enc0, enc1) = Aim(alt, az);
                 await MoveTo(enc0, enc1, token);
             }
         }
@@ -276,7 +309,7 @@ namespace NINA.Equipment.Equipment.Origin {
                 var when = startUtc + t;
                 var (raDegrees, decDegrees) = ephemeris(when);
                 var (alt, az) = sky.ToHorizon(raDegrees, decDegrees, when);
-                var (enc0, enc1) = model.ToEncoders(alt, az);
+                var (enc0, enc1) = Aim(alt, az);
                 // The start must be within the limit; after it the track follows on in the count and may carry on past the limit, up to the overrun.
                 turned = turned is double previous ? wrap.TurnedNear(enc0, previous) : wrap.TurnedFor(enc0);
                 if (Math.Abs(turned.Value) > wrap.Limit + OriginCordWrap.TrackOverrun) {
@@ -299,7 +332,7 @@ namespace NINA.Equipment.Equipment.Origin {
             var start = DateTime.UtcNow + TimeSpan.FromSeconds(45);
             var (ra0, dec0) = ephemeris(start);
             var (alt, az) = sky.ToHorizon(ra0, dec0, start);
-            var (enc0, enc1) = model.ToEncoders(alt, az);
+            var (enc0, enc1) = Aim(alt, az);
             await MoveTo(enc0, enc1, token);
             await backend.QueryMount(token);
             await backend.TrackMovingTarget(BuildTrack(ephemeris, DateTime.UtcNow + TimeSpan.FromSeconds(3), length, step ?? TimeSpan.FromSeconds(30)), token);

@@ -1141,6 +1141,40 @@ namespace NINA.Test.Equipment.Origin {
         }
 
         [Test]
+        public async Task Mount_StaysParkedUntilPinsUnparksEvenWhenTheFirmwareSaysAligned() {
+            // the firmware initialises by itself after a reboot; the web page will not unpark a mount that is not parked
+            var mount = NewTelescope();
+            mount.FakeInitialize = true;
+            await mount.Connect(default);
+            await PushTaskState("IDLE");
+            await WaitFor(() => telescope.Received.Any(m => m.Value<string>("Command") == "GetStatus"));
+
+            mount.AtPark.Should().BeTrue("PI.N.S.'s own Unpark, with its plate solves, has not run");
+            await mount.Unpark(default);
+            mount.AtPark.Should().BeFalse("Unpark has run, even with no plate solve (UnparkPoints is 0 here)");
+            mount.Disconnect();
+        }
+
+        [Test]
+        public async Task Mount_StaysParkedAndUnparkFailsWhenThePlateSolveDoesNot() {
+            var mount = NewTelescope();
+            mount.FakeInitialize = true;
+            mount.UnparkPoints = 1;
+            mount.Solve = (_, _) => Task.FromResult<(double, double)?>(null);        // cloud
+            telescope.Files["Images/Temp/cloud.fits"] = OriginFakeTelescope.FitsHeader(2, 800);
+            telescope.CaptureResults.Enqueue("Images/Temp/cloud.fits");
+            await mount.Connect(default);
+            await PushTaskState("IDLE");
+            await WaitFor(() => telescope.Received.Any(m => m.Value<string>("Command") == "GetStatus"));
+
+            await FluentActions.Invoking(() => mount.Unpark(default)).Should().ThrowAsync<OriginException>().WithMessage("*no successful plate solve*");
+
+            mount.AtPark.Should().BeTrue("no plate solve has succeeded");
+            mount.PointingModel.Should().BeNull();
+            mount.Disconnect();
+        }
+
+        [Test]
         public async Task Mount_RefusesToMoveWithTheSunUp() {
             var mount = NewTelescope();
             mount.SunAltitude = (_, _, _) => 12;

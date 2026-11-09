@@ -100,6 +100,7 @@ namespace NINA.Equipment.Equipment.Origin {
         private DateTime trackUntil;
         private (double Ra, double Dec, double Alt, double Az)? modelled;      // radians, from the model at the last poll
         private bool firmwareAligned;                                          // the telescope's own initialisation ran: its frame is real
+        private bool unparkedByPins;                                           // PI.N.S.'s Unpark has run this session (counts only with UNPARK_ALIGN=0)
 
         public OriginTelescope(IProfileService profileService, string host, int port = OriginBackend.DefaultPort, string logDirectory = null, string filterFile = null) : base(host, port, logDirectory, filterFile) {
             this.profileService = profileService;
@@ -286,7 +287,12 @@ namespace NINA.Equipment.Equipment.Origin {
 
         public bool AtHome => false;
         public bool CanFindHome => false;
-        public bool AtPark => parkedAtPolaris || !aligned;
+        // With the fake initialisation (the default), the mount stays parked until a plate solve has succeeded, even when the firmware reports itself aligned: the
+        // firmware initialises by itself after a reboot, the web page refuses to unpark an unparked mount, and without a solve every goto would go by the invented
+        // frame. UNPARK_ALIGN=0 asks for no solve, so there Unpark alone unparks; after the telescope's own initialisation its frame is real.
+        private bool AwaitingPlateSolve => FakeInitialize && !firmwareAligned && (UnparkPoints > 0 ? calibration?.Model == null : !unparkedByPins);
+
+        public bool AtPark => parkedAtPolaris || !aligned || AwaitingPlateSolve;
         public bool CanPark => true;
         public bool CanUnpark => true;
         public bool CanSetPark => false;
@@ -471,8 +477,12 @@ namespace NINA.Equipment.Equipment.Origin {
         public async Task Park(CancellationToken token) {
             var backend = Backend ?? throw new OriginException($"{Name} is not connected");
             RefuseInDaylight("parking");
-            if (calibration?.Model == null && !firmwareAligned && FakeInitialize && aligned) {
-                throw new InvalidOperationException($"{Name}: no plate solve yet, so the celestial pole cannot be found to park on; plate solve and sync first");
+            if (calibration?.Model == null && !firmwareAligned && FakeInitialize) {
+                // no plate solve yet: where north is, and so the pole, is not known; the mount already reports parked
+                Logger.Warning($"{Name}: no plate solve yet, so the celestial pole cannot be found to park on; leaving the tube where it is");
+                trackTarget = null;
+                await backend.AbortMotion(token);
+                return;
             }
             if (calibration?.Model == null) {
                 // the firmware's own frame is real: its goto, then no tracking
@@ -487,7 +497,7 @@ namespace NINA.Equipment.Equipment.Origin {
             try {
                 await backend.AbortMotion(token);
                 var latitude = SiteLatitude;
-                var (enc0, enc1) = calibration.Model.ToEncoders(Math.Abs(latitude), latitude >= 0 ? 0 : 180);
+                var (enc0, enc1) = calibration.Aim(Math.Abs(latitude), latitude >= 0 ? 0 : 180);
                 await calibration.MoveTo(enc0, enc1, token);
                 parkedAtPolaris = !stopRequested;
             } finally {
@@ -541,14 +551,24 @@ namespace NINA.Equipment.Equipment.Origin {
             var site = profileService.ActiveProfile.AstrometrySettings;
             if (aligned) {
                 parkedAtPolaris = false;
+                unparkedByPins = true;
                 // PI.N.S. restarted on a telescope already fake-initialised: its own pointing has to be set up again
                 if (FakeInitialize && !firmwareAligned && calibration?.Model == null && !(site.Latitude == 0 && site.Longitude == 0)) {
                     await AlignFromPlateSolves(backend, site.Latitude, site.Longitude, site.Elevation, token);
                     await Poll(token);
                 }
+                ThrowIfStillAwaitingPlateSolve();
                 return;
             }
             await Initialize(FakeInitialize, token);
+            ThrowIfStillAwaitingPlateSolve();
+        }
+
+        private void ThrowIfStillAwaitingPlateSolve() {
+            if (AwaitingPlateSolve) {
+                throw new OriginException($"{Name}: no successful plate solve, so the mount stays parked: gotos would otherwise go by the firmware's invented frame. " +
+                                          "Check the sky is clear and astrometry.net's index files are installed (the log says which), then unpark again");
+            }
         }
 
         private async Task Initialize(bool fake, CancellationToken token) {
@@ -563,6 +583,7 @@ namespace NINA.Equipment.Equipment.Origin {
             sky = null;
             modelled = null;
             firmwareAligned = false;
+            unparkedByPins = false;
             if (fake) {
                 Logger.Info($"{Name}: fake initialisation: PI.N.S. aligns from its own plate solves; the firmware will not avoid the sun");
             } else if (backend.Data.OrientationLastUpdate.HasValue && backend.Data.Orientation.Altitude < TreeClearDegrees) {
@@ -584,6 +605,7 @@ namespace NINA.Equipment.Equipment.Origin {
             }
             parkedAtPolaris = false;
             firmwareAligned = !fake;
+            unparkedByPins = true;
             await Poll(token);
             if (fake) {
                 var waited = System.Diagnostics.Stopwatch.StartNew();

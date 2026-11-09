@@ -124,8 +124,10 @@ namespace NINA.Test.Equipment.Origin {
                     var miss = i == 0 ? first : await Slew(star);
                     var misses = new List<double> { miss };
                     // Before the full model, a level-base one on a tilted base tracks a few arcminutes off in the minute between a frame and the next (about
-                    // 0.26' per degree of tilt), so centring settles there; with the full model it settles within 2'.
-                    double Tolerance() => mount.PointingModel.Points >= 3 ? 2 : Math.Max(2, 0.4 * tilt);
+                    // 0.26' per degree of tilt), so centring settles there. The first star's syncs all lie near it, and a fit from clustered points cannot pin
+                    // the tilt down either; from the second star, with points spread over the sky, centring settles within 2'.
+                    var isFirstStar = i == 0;
+                    double Tolerance() => !isFirstStar && mount.PointingModel.Points >= 3 ? 2 : Math.Max(2, 0.4 * tilt);
                     for (var attempt = 0; attempt < 4 && miss > Tolerance(); attempt++) {
                         mount.Sync(new Coordinates(Angle.ByDegree(lastSolved.Ra), Angle.ByDegree(lastSolved.Dec), Epoch.J2000)).Should().BeTrue("the solve should be taken as a point");
                         miss = await Slew(star);
