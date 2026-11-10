@@ -76,6 +76,7 @@ is_target_library() {
   case "$1" in
     ld-linux*|libc.so*|libm.so*|libdl.so*|libpthread.so*|librt.so*|libresolv.so*|libnss_*|libutil.so*|libanl.so*) return 0 ;;
     libssl.so*|libcrypto.so*) return 0 ;;
+    libgphoto2.so*|libgphoto2_port.so*) return 0 ;;    # OpenCV links it; see the links made below
     *) return 1 ;;
   esac
 }
@@ -90,6 +91,14 @@ done
 chmod -R u+w "$OPT/lib"
 for library in "$OPT/lib"/* "$OPT/libOpenCvSharpExtern.so" "$OPT/OpenCvSharpExtern.so" "$OPT/External/$RUNTIME"/lib*.so; do
   patchelf --set-rpath '$ORIGIN:$ORIGIN/lib:$ORIGIN/../../lib' "$library" 2>/dev/null || true
+done
+
+# libgphoto2 finds its camera and port drivers in folders of the system's own installation, so it is not bundled, even for OpenCV. It comes
+# from the runtime packages in Depends, and these links stand in for the unversioned names that only libgphoto2-dev provides.
+# Made after the rpath loop, which would otherwise follow them into the build machine's /usr/lib.
+for name in libgphoto2.so.6 libgphoto2_port.so.12; do
+  ln -sf "/usr/lib/x86_64-linux-gnu/$name" "$OPT/External/$RUNTIME/${name%.so.*}.so"
+  ln -sf "/usr/lib/x86_64-linux-gnu/$name" "$OPT/lib/${name%.so.*}.so"
 done
 
 echo "[INFO] Adding plugins"
@@ -137,7 +146,7 @@ Priority: optional
 Architecture: amd64
 Maintainer: PINS Team
 Installed-Size: $installed_size
-Depends: libc6 (>= $(ldd --version | sed -n '1s/.* \([0-9]*\.[0-9]*\).*/\1/p')), libssl3t64 | libssl3, libudev1, libusb-1.0-0
+Depends: libc6 (>= $(ldd --version | sed -n '1s/.* \([0-9]*\.[0-9]*\).*/\1/p')), libssl3t64 | libssl3, libudev1, libusb-1.0-0, libgphoto2-6t64 | libgphoto2-6, libgphoto2-port12t64 | libgphoto2-port12
 Recommends: astrometry-data-tycho2-07-littleendian | astrometry-data-tycho2-07
 Conflicts: pins
 Description: PI.N.S. with Touch-N-Stars and Celestron Origin drivers
