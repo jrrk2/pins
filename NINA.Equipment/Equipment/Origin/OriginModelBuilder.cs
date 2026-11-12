@@ -247,6 +247,10 @@ namespace NINA.Equipment.Equipment.Origin {
             }
             try {
                 await mount.StopForModelBuild(token);
+                var iso = backend.SolveIso(Options.Iso);
+                if (iso != Options.Iso) {
+                    Logger.Info($"Origin model builder: the nebula filter is fitted, so frames are taken at ISO {iso}");
+                }
                 for (var round = 0; round <= Options.BuilderNumRetries && todo.Count > 0 && !stopRequested; round++) {
                     if (round > 0) {
                         Logger.Info($"Origin model builder: trying {todo.Count} point{(todo.Count == 1 ? "" : "s")} again");
@@ -271,7 +275,7 @@ namespace NINA.Equipment.Equipment.Origin {
                             mount.MovedByModelBuild();
                         }
                         SetState(point, OriginModelPointState.Exposing);
-                        var solveIt = await calibration.Capture(Options.ExposureSeconds, Options.Iso, token);
+                        var solveIt = await calibration.Capture(Options.ExposureSeconds, iso, token);
                         SetState(point, OriginModelPointState.Processing);
                         solving.Add(Task.Run(async () => Apply(point, await solveIt(token), calibration), token));
                         ThrowIfTooManyFailed();

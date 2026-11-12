@@ -605,7 +605,7 @@ namespace NINA.Equipment.Equipment.Origin {
             calibration = new OriginCalibration(backend, sky, Solve, new SofaOriginSky(latitude, longitude, elevation));
             try {
                 await PointUpForUnparkSolve(backend, token);
-                calibration.Refine(await calibration.Measure(2, 800, token));
+                calibration.Refine(await calibration.Measure(2, backend.SolveIso(800), token));
             } catch (OriginException ex) {
                 Logger.Error($"{Name}: could not plate solve during Unpark ({ex.Message}); gotos use the firmware's invented frame until a plate solve and sync");
             }

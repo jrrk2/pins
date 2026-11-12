@@ -1719,5 +1719,19 @@ namespace NINA.Test.Equipment.Origin {
             ((int)sorted[sorted.Length / 2]).Should().BeInRange(1000, 60000);
             camera.Disconnect();
         }
+
+        /// <summary>With the nebula filter fitted, plate-solve frames go to ISO 1000 at least; otherwise, or with no filter file, the ISO asked for.</summary>
+        [TestCase("nebula\n", 800, 1000)]
+        [TestCase("Nebula", 1600, 1600)]
+        [TestCase("clear", 800, 800)]
+        [TestCase("", 800, 800)]
+        public void SolveIso_IsRaisedForTheNebulaFilter(string fileContent, int asked, int expected) {
+            if (fileContent.Length > 0) {
+                File.WriteAllText(filterFile, fileContent);
+            }
+            var backend = NewBackend();
+
+            backend.SolveIso(asked).Should().Be(expected);
+        }
     }
 }

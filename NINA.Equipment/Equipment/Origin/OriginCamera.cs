@@ -74,7 +74,7 @@ namespace NINA.Equipment.Equipment.Origin {
         public short BayerOffsetY => 0;
         public int CameraXSize => SensorWidth;
         public int CameraYSize => SensorHeight;
-        public double ExposureMin => 0.000001;
+        public double ExposureMin => 0.00005;                                   // 50 microseconds; above that, any whole number of microseconds
         public double ExposureMax => 3600;
         public short MaxBinX => 1;
         public short MaxBinY => 1;

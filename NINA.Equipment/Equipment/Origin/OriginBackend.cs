@@ -960,13 +960,7 @@ namespace NINA.Equipment.Equipment.Origin {
         /// before every initialize, so that plate solves and centring pick exposures for the filter really fitted. A failure is reported and does not stop what comes next.
         /// </summary>
         public async Task DeclareConfiguredFilter(CancellationToken token = default) {
-            string name;
-            try {
-                name = File.Exists(filterFile) ? File.ReadAllText(filterFile).Trim().ToLowerInvariant() : string.Empty;
-            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
-                Logger.Warning($"Origin: could not read {filterFile}: {ex.Message}");
-                return;
-            }
+            var name = ConfiguredFilter;
             if (name is not ("clear" or "nebula")) {
                 return;
             }
@@ -976,6 +970,27 @@ namespace NINA.Equipment.Equipment.Origin {
                 Logger.Warning($"Origin: filter {name} not declared: {ex.Message}");
             }
         }
+
+        /// <summary>What ~/.config/origin/filter says is fitted, in lower case ("nebula", "clear"), or empty when it is missing or cannot be read.</summary>
+        public string ConfiguredFilter {
+            get {
+                try {
+                    return File.Exists(filterFile) ? File.ReadAllText(filterFile).Trim().ToLowerInvariant() : string.Empty;
+                } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                    Logger.Warning($"Origin: could not read {filterFile}: {ex.Message}");
+                    return string.Empty;
+                }
+            }
+        }
+
+        /// <summary>The ISO for PI.N.S.'s own plate-solve frames with the nebula filter fitted, which passes only a small part of a star's light.</summary>
+        public const int NebulaSolveIso = 1000;
+
+        /// <summary>
+        /// The ISO for a plate-solve frame (Unpark, the model builder): at least <see cref="NebulaSolveIso"/> with the nebula filter, otherwise as asked. These
+        /// frames are taken with the mount still, so a longer exposure would only lengthen the star trails (the sky turns up to 15" a second); a higher ISO helps.
+        /// </summary>
+        public int SolveIso(int iso) => ConfiguredFilter == "nebula" ? Math.Max(iso, NebulaSolveIso) : iso;
 
         private async Task DeclareConfiguredFilterLogged() {
             try {
