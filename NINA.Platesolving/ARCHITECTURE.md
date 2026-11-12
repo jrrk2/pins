@@ -35,6 +35,7 @@ Build shape from `NINA.PlateSolving.csproj`:
 - `GetPlateSolver(...)` maps `PlateSolverEnum` values to concrete solver implementations.
 - `GetBlindSolver(...)` maps `BlindSolverEnum` values to the corresponding solver choice.
 - pins: off Windows, a profile on ASTAP with no ASTAP installed solves with `LocalPlateSolver` when `solve-field` is installed (`ResolveSolver`), and new profiles default to `LOCAL` there (`PlateSolveSettings.SetDefaultValues`). The Origin driver's own alignment solves (`OriginAstrometryNet`) call `solve-field` directly and never go through the profile.
+- pins: `ImageSolver.Solve` does not solve a frame on which star detection has already found fewer than `ImageSolver.MinimumStars` (5) stars, near or blind; it fails at once instead of taking a minute (a planet in twilight on the camera page, which detects stars before its solve). A frame with no star detection run (`DetectedStars` -1) is solved as before.
 - `PlateSolverFactoryProxy` also constructs higher-level orchestration objects:
   - `ImageSolver`
   - `CaptureSolver`

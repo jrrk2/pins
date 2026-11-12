@@ -131,5 +131,57 @@ namespace NINA.Test.PlateSolving {
             plateSolverMock.Verify(x => x.SolveAsync(It.IsAny<IImageData>(), It.IsAny<PlateSolveParameter>(), It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>()), Times.Once());
             blindSolverMock.Verify(x => x.SolveAsync(It.IsAny<IImageData>(), It.IsAny<PlateSolveParameter>(), It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>()), Times.Once());
         }
+
+        private static IImageData FrameWithStars(int detected) {
+            var image = new Mock<IImageData>();
+            image.SetupProperty(x => x.StarDetectionAnalysis, new StarDetectionAnalysis() { DetectedStars = detected });
+            return image.Object;
+        }
+
+        private void BothSolversSucceed() {
+            foreach (var solver in new[] { plateSolverMock, blindSolverMock }) {
+                solver
+                    .Setup(x => x.SolveAsync(It.IsAny<IImageData>(), It.IsAny<PlateSolveParameter>(), It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>()))
+                    .ReturnsAsync(new PlateSolveResult() { Success = true });
+            }
+        }
+
+        /// <summary>A frame with only a planet in it, or one or two stars in twilight: no solver is asked, near or blind.</summary>
+        [TestCase(0)]
+        [TestCase(1)]
+        [TestCase(ImageSolver.MinimumStars - 1)]
+        public async Task TooFewStars_AreNotSolved(int detected) {
+            BothSolversSucceed();
+            var sut = new ImageSolver(plateSolverMock.Object, blindSolverMock.Object);
+            var parameter = new PlateSolveParameter() {
+                FocalLength = 335,
+                BlindFailoverEnabled = true,
+                Coordinates = new Coordinates(Angle.ByDegree(147.7), Angle.ByDegree(13.8), Epoch.J2000)
+            };
+
+            var result = await sut.Solve(FrameWithStars(detected), parameter, default, default);
+
+            result.Success.Should().BeFalse();
+            plateSolverMock.Verify(x => x.SolveAsync(It.IsAny<IImageData>(), It.IsAny<PlateSolveParameter>(), It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>()), Times.Never());
+            blindSolverMock.Verify(x => x.SolveAsync(It.IsAny<IImageData>(), It.IsAny<PlateSolveParameter>(), It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>()), Times.Never());
+        }
+
+        /// <summary>Enough stars, or no star detection run on the frame (-1): solved as before.</summary>
+        [TestCase(ImageSolver.MinimumStars)]
+        [TestCase(200)]
+        [TestCase(-1)]
+        public async Task EnoughStarsOrNoDetection_AreSolved(int detected) {
+            BothSolversSucceed();
+            var sut = new ImageSolver(plateSolverMock.Object, blindSolverMock.Object);
+            var parameter = new PlateSolveParameter() {
+                FocalLength = 335,
+                Coordinates = new Coordinates(Angle.ByDegree(147.7), Angle.ByDegree(13.8), Epoch.J2000)
+            };
+
+            var result = await sut.Solve(FrameWithStars(detected), parameter, default, default);
+
+            result.Success.Should().BeTrue();
+            plateSolverMock.Verify(x => x.SolveAsync(It.IsAny<IImageData>(), It.IsAny<PlateSolveParameter>(), It.IsAny<IProgress<ApplicationStatus>>(), It.IsAny<CancellationToken>()), Times.Once());
+        }
     }
 }
