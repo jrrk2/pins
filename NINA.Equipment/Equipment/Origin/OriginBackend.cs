@@ -796,7 +796,9 @@ namespace NINA.Equipment.Equipment.Origin {
             await DeclareConfiguredFilter(token);                                 // before the mount moves and aligns
             var start = DateTime.UtcNow;
             var link = LinkGeneration;
-            var reply = await Request("RunInitialize", "TaskController", new JObject {
+            var waited = System.Diagnostics.Stopwatch.StartNew();
+            var limit = timeout ?? TimeSpan.FromSeconds(300);
+            async Task<JObject> RunInitialize() => await Request("RunInitialize", "TaskController", new JObject {
                 ["Date"] = now.ToString("dd MM yyyy", CultureInfo.InvariantCulture),
                 ["Time"] = now.ToString("HH:mm:ss", CultureInfo.InvariantCulture),
                 ["TimeZone"] = timeZoneId,
@@ -804,7 +806,26 @@ namespace NINA.Equipment.Equipment.Origin {
                 ["Longitude"] = longitude * Math.PI / 180,
                 ["FakeInitialize"] = fake
             }, TimeSpan.FromSeconds(8), token) ?? throw new OriginException("No answer from the telescope to RunInitialize");
+            var reply = await RunInitialize();
             // The firmware starts an initialisation by itself after a reboot (2026-11-07) and refuses a second. A real one can simply be waited for; that one will not be fake.
+            // A fake one has to wait for it to end, however it ends (2026-11-13: it failed on "Could not identify the field of view" 30 s on), and then be asked for again.
+            if (fake && reply.Value<int?>("ErrorCode") == InitializationAlreadyRunning) {
+                RecordEvent("initialization_waited", "The telescope was already initialising; waiting for it to end before the fake initialisation");
+                while (LastMessage("TaskController/GetStatus")?.Value<string>("State") == "INITIALIZING") {
+                    if (waited.Elapsed >= limit) {
+                        throw new OriginException($"The telescope's own initialisation was still running after {limit.TotalSeconds:0} s");
+                    }
+                    await Task.Delay(InitializePollInterval, token);
+                    if (!SameLink(link)) {
+                        throw new OriginException("The link to the telescope was lost while waiting for its own initialisation to end");
+                    }
+                }
+                lock (stateLock) {
+                    taskError = null;       // the errors of the telescope's own initialisation, not of this one
+                }
+                start = DateTime.UtcNow;
+                reply = await RunInitialize();
+            }
             var alreadyRunning = !fake && reply.Value<int?>("ErrorCode") == InitializationAlreadyRunning;
             if (alreadyRunning) {
                 lock (stateLock) {
@@ -815,8 +836,6 @@ namespace NINA.Equipment.Equipment.Origin {
                 ThrowOnError("RunInitialize", reply);
             }
 
-            var waited = System.Diagnostics.Stopwatch.StartNew();
-            var limit = timeout ?? TimeSpan.FromSeconds(300);
             var state = string.Empty;
             var step = string.Empty;
             var percent = 0;

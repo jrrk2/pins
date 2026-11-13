@@ -640,6 +640,26 @@ namespace NINA.Test.Equipment.Origin {
         }
 
         [Test]
+        public async Task Initialize_FakeWaitsForOneTheFirmwareStartedItselfToEnd() {
+            // After a reboot on 2026-11-13 Unpark's fake initialisation was refused with -73; the firmware's own one failed 30 s later.
+            await backend.ConnectAsync();
+            await PushTaskState("INITIALIZING");
+            telescope.Handlers["RunInitialize"] = command => {
+                if (telescope.Count("RunInitialize") == 1) {
+                    _ = Task.Delay(300).ContinueWith(_ => PushTaskState("INITIALIZING", "STOPPED", 2, new JObject { ["ErrorMessage"] = "Could not identify the field of view" }))
+                        .Unwrap().ContinueWith(_ => Task.Delay(300)).Unwrap().ContinueWith(_ => PushTaskState("IDLE", sequence: 3));
+                    return new JObject { ["ErrorCode"] = -73, ["ErrorMessage"] = "TaskController: initialization was already running when RunInitialize called." };
+                }
+                _ = PushTaskState("IDLE", sequence: 4, extra: new JObject { ["IsFakeInitialized"] = true });
+                return new JObject { ["ErrorCode"] = 0 };
+            };
+
+            await backend.Initialize(52.2, 0.12, "UTC", fake: true);
+
+            telescope.Count("RunInitialize").Should().Be(2);
+        }
+
+        [Test]
         public async Task Initialize_FakeIsNotSatisfiedByARealOneAlreadyRunning() {
             await backend.ConnectAsync();
             telescope.Handlers["RunInitialize"] = command => new JObject { ["ErrorCode"] = -73, ["ErrorMessage"] = "already running" };
