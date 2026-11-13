@@ -147,17 +147,58 @@ namespace NINA.Equipment.Equipment.Origin {
             }
         }
 
-        /// <summary>Replaces the points with a golden spiral of this many within the altitude and azimuth limits.</summary>
+        /// <summary>
+        /// How far above the profile's horizon a point must be, degrees: half the camera's field (about 0.6) and the pointing error of a model not yet
+        /// built, so that the frame shows sky and not the tops of the trees.
+        /// </summary>
+        internal const double HorizonClearance = 1;
+
+        /// <summary>
+        /// Replaces the points with a golden spiral of this many within the altitude and azimuth limits, and above the profile's horizon when it has one.
+        /// </summary>
         public IReadOnlyList<OriginModelPoint> GenerateGoldenSpiral(int count) {
             ThrowIfBuilding();
             Options.GoldenSpiralStarCount = count;
-            var list = GoldenSpiral(count, Options.MinPointAltitude, Options.MaxPointAltitude, Options.MinPointAzimuth, Options.MaxPointAzimuth)
-                .Select((p, i) => new OriginModelPoint(i + 1, p.Altitude, p.Azimuth)).ToList();
+            var horizon = mount.Horizon;
+            var spiral = horizon == null
+                ? GoldenSpiral(count, Options.MinPointAltitude, Options.MaxPointAltitude, Options.MinPointAzimuth, Options.MaxPointAzimuth)
+                : GoldenSpiralAboveHorizon(count, Options.MinPointAltitude, Options.MaxPointAltitude, Options.MinPointAzimuth, Options.MaxPointAzimuth, horizon.GetAltitude);
+            if (spiral.Count == 0) {
+                throw new InvalidOperationException($"The profile's horizon hides all the sky between {Options.MinPointAltitude} and {Options.MaxPointAltitude} degrees altitude");
+            }
+            var list = spiral.Select((p, i) => new OriginModelPoint(i + 1, p.Altitude, p.Azimuth)).ToList();
             lock (sync) {
                 points = list;
             }
-            Logger.Info($"Origin model builder: {list.Count} points between {Options.MinPointAltitude} and {Options.MaxPointAltitude} degrees altitude");
+            Logger.Info($"Origin model builder: {list.Count} points between {Options.MinPointAltitude} and {Options.MaxPointAltitude} degrees altitude" +
+                        (horizon == null ? string.Empty : ", above the profile's horizon"));
             return list;
+        }
+
+        /// <summary>
+        /// The golden spiral without the points the horizon hides (trees, buildings), made up to the count from a denser spiral, so that the points stay evenly
+        /// spread over the sky that is open. When no spiral of up to 500 points leaves exactly the count, the nearest larger set; when none leaves as many,
+        /// all the open points of the largest.
+        /// </summary>
+        internal static IReadOnlyList<(double Altitude, double Azimuth)> GoldenSpiralAboveHorizon(int count, double minAltitude, double maxAltitude, double minAzimuth,
+                                                                                                 double maxAzimuth, Func<double, double> horizonAltitude) {
+            List<(double Altitude, double Azimuth)> over = null;
+            var under = new List<(double Altitude, double Azimuth)>();
+            for (var n = count; n <= 500; n++) {
+                var open = GoldenSpiral(n, minAltitude, maxAltitude, minAzimuth, maxAzimuth)
+                    .Where(p => p.Altitude >= horizonAltitude(p.Azimuth) + HorizonClearance).ToList();
+                if (open.Count == count) {
+                    return open;
+                }
+                if (open.Count > count) {
+                    if (over == null || open.Count < over.Count) {
+                        over = open;
+                    }
+                } else if (open.Count > under.Count) {
+                    under = open;
+                }
+            }
+            return over ?? under;
         }
 
         /// <summary>

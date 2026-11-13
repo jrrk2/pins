@@ -14,6 +14,7 @@
 
 using NINA.Astrometry;
 using NINA.Core.Enum;
+using NINA.Core.Model;
 using NINA.Core.Utility;
 using NINA.Equipment.Interfaces;
 using NINA.Profile.Interfaces;
@@ -109,6 +110,9 @@ namespace NINA.Equipment.Equipment.Origin {
             this.profileService = profileService;
             ModelBuilder = new OriginModelBuilder(this);
         }
+
+        /// <summary>The profile's custom horizon (Touch-N-Stars' Horizon File): trees and buildings, by azimuth. Null when none is set.</summary>
+        internal CustomHorizon Horizon => profileService?.ActiveProfile?.AstrometrySettings?.Horizon;
 
         /// <summary>The Origin mount last connected, for the model builder screens (which check <see cref="OriginDevice.Connected"/>); null before any.</summary>
         public static OriginTelescope Current { get; private set; }

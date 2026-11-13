@@ -66,6 +66,28 @@ namespace NINA.Test.Equipment.Origin {
             FluentActions.Invoking(() => OriginModelBuilder.GoldenSpiral(0, 25, 80, 0, 360)).Should().Throw<ArgumentOutOfRangeException>();
         }
 
+        /// <summary>Trees to the north up to 50 degrees: no point behind them, and still the count asked for.</summary>
+        [Test]
+        public void GoldenSpiralAboveHorizon_LeavesOutThePointsBehindTheTrees() {
+            Func<double, double> trees = azimuth => azimuth >= 300 || azimuth <= 60 ? 50 : 10;
+
+            var points = OriginModelBuilder.GoldenSpiralAboveHorizon(12, 25, 80, 0, 360, trees);
+
+            points.Should().HaveCount(12);
+            points.Should().OnlyContain(p => p.Altitude >= trees(p.Azimuth) + OriginModelBuilder.HorizonClearance);
+            points.Should().Contain(p => p.Azimuth > 300 || p.Azimuth < 60, "the sky above the trees to the north is still used");
+        }
+
+        [Test]
+        public void GoldenSpiralAboveHorizon_IsTheSpiralWhenTheHorizonHidesNothing() {
+            OriginModelBuilder.GoldenSpiralAboveHorizon(12, 25, 80, 0, 360, _ => 0).Should().Equal(OriginModelBuilder.GoldenSpiral(12, 25, 80, 0, 360));
+        }
+
+        [Test]
+        public void GoldenSpiralAboveHorizon_IsEmptyWhenTheHorizonHidesAllTheBand() {
+            OriginModelBuilder.GoldenSpiralAboveHorizon(12, 25, 80, 0, 360, _ => 85).Should().BeEmpty();
+        }
+
         [Test]
         public void Options_ResetToDefaults() {
             var options = new OriginModelBuilderOptions { MinPointAltitude = 5, GoldenSpiralStarCount = 99 };
