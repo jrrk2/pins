@@ -66,6 +66,6 @@ First tried on the real telescope on the morning of 12 November: Unpark, autofoc
 - **Unpark moves the telescope.** Keep a hand near the power the first time.
 - If Unpark cannot plate solve (cloud, or no index files), it says so in the log (`~/.local/share/NINA/Logs`) and gotos go by the telescope's made-up frame until a plate solve and sync. Known: the web page may not show that, or other Unpark failures.
 
-Checked on 2026-11-16 against OriginSimulator, installed from this .deb with a fresh profile: connect, Unpark with one plate solve in 14 s, a 2 s frame, a slew to the meridian that ended 0.3 arcminutes from the target, and Park.
+Checked on 2026-11-16 against OriginSimulator, installed from this .deb with a fresh profile: connect, Unpark with one plate solve in 16 s, a 2 s frame, a slew to the meridian that ended 0.3 arcminutes from the target, and Park.
 
 SHA-256 in the `.sha256` file.
