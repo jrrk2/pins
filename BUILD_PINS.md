@@ -9,10 +9,10 @@ This document describes how to build the PINS Debian package (Raspberry Pi `linu
 
 ---
 
-## Celestron Origin test package (linux-x64), from a clean clone
+## Celestron Origin test package (Linux, macOS), from a clean clone
 
 The `pins-origin` .deb (installs to `/opt/pins`, published as the `v*-originN` pre-releases) builds from a clone of this repository on any x86-64
-Ubuntu 24.04 or later, or a derivative such as KDE neon. Everything else is fetched at the versions pinned in `packaging/deps.env`:
+Ubuntu 24.04 or later, or a derivative such as KDE neon, and on arm64 Debian 13 (see "On a Raspberry Pi" below). Everything else is fetched at the versions pinned in `packaging/deps.env`:
 
 ```bash
 git clone -b origin-direct-driver https://github.com/jrrk2/pins.git && cd pins
@@ -40,6 +40,18 @@ pre-release with the notes in `packaging/release-notes/origin<N>.md` (`NOTES=fil
 has published it already. It needs `gh` logged in, and refuses a package whose checksum does not match, that was built from uncommitted changes,
 or whose commit is not pushed or differs from `HEAD` in more than the release notes. So the notes can be committed after the build, and the
 package, `.sha256` and `.commit` can be copied from the machine that built them to publish from another.
+
+### On a Raspberry Pi
+
+The same `make release` on an arm64 Debian 13, such as Raspberry Pi OS on a Pi 5, builds `pins-origin_<version>+origin<N>_arm64.deb`, with the
+same `apt-get install` lines (Debian's `ldconfig` is in `/sbin`, which the packager adds to its `PATH`). A Pi's package is meant for a disk image
+built on the same release, so by default it carries none of the libraries it was built against: it links the distribution's OpenCV, libraw,
+cfitsio and hidapi and names their packages in `Depends`, so `sudo apt install ./pins-origin_…_arm64.deb` brings them in (65 MB rather than
+157 MB). `LIBRARIES=bundled make release` makes the amd64 kind instead, and `LIBRARIES=system` the arm64 kind on amd64. Bundling never rewrites
+the libraries in `/opt/pins/lib` with patchelf: on Debian 13 arm64 a rewritten `libprotobuf` aborts as it loads, and the launcher's
+`LD_LIBRARY_PATH` finds them anyway. A Pi 5 passed `make release-test` with both kinds (2026-11-16): Unpark 20-36 s, a 2 s frame 12 s.
+
+Debian has the Origin's index files as `astrometry-data-2mass-08-19`, or put 4208-4211 in `~/astrometry_indices` as for a Mac below.
 
 ### On a Mac
 
