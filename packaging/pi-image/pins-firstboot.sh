@@ -17,6 +17,7 @@ getent hosts deb.debian.org > /dev/null || { echo "No internet: the first boot d
 
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$deb" astrometry.net
+apt-get clean       # the downloaded packages, about 850 MB: room on small cards
 systemctl enable --now "pins@$user.service"
 touch /var/lib/pins-image-installed
 echo "PI.N.S. installed and started as $user: http://$(hostname).local:5000"
