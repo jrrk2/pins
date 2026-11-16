@@ -26,6 +26,18 @@ namespace NINA.Test.Utility {
     public class CoreUtilTest {
 
         /// <summary>
+        /// The data folder follows HOME on macOS too, where .NET's own answer ignores it, so that a run with another HOME keeps to that home.
+        /// </summary>
+        [Test]
+        public void LocalApplicationData_IsUnderHome() {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var expected = OperatingSystem.IsMacOS() ? Path.Combine(home, "Library", "Application Support")
+                : Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            Assert.That(CoreUtil.LocalApplicationData(), Is.EqualTo(expected));
+            Assert.That(CoreUtil.APPLICATIONTEMPPATH, Is.EqualTo(Path.Combine(expected, "NINA")));
+        }
+
+        /// <summary>
         /// Verifies byte formatting at representative binary units so image/file sizes remain readable in diagnostics.
         /// </summary>
         [Test]

@@ -39,7 +39,17 @@ namespace NINA.Core.Utility {
                 .Union(new char[] { '"', '<', '>', '|', ':', '*', '?' })
                 .ToArray();
         public static string APPLICATIONDIRECTORY = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
-        public static string APPLICATIONTEMPPATH = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NINA");
+        public static string APPLICATIONTEMPPATH = Path.Combine(LocalApplicationData(), "NINA");
+
+        /// <summary>
+        /// .NET's local application data folder: ~/.local/share on Linux, ~/Library/Application Support on macOS. On macOS .NET asks the system for it,
+        /// which ignores HOME, so it is made from HOME here, as on Linux: a run with another HOME (as make release-test's) keeps to that home.
+        /// </summary>
+        public static string LocalApplicationData() {
+            return OperatingSystem.IsMacOS()
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Application Support")
+                : Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        }
         public static DateTime ApplicationStartDate = DateTime.Now;
         public static DateTime UnixEpoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         public static long UnixEpochTicks = UnixEpoch.Ticks;
