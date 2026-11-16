@@ -35,8 +35,6 @@ namespace NINA.Astrometry {
         }
 
         private static IntPtr ResolveLibrary(string libraryName, System.Reflection.Assembly assembly, DllImportSearchPath? searchPath) {
-            var arch = RuntimeInformation.ProcessArchitecture.ToString().ToLower();
-            var platformFolder = Environment.Is64BitProcess ? $"linux-{arch}" : $"linux-{arch}";
             string subfolder = null;
 
             // Determine which library and subfolder
@@ -47,7 +45,7 @@ namespace NINA.Astrometry {
             }
 
             if (subfolder != null) {
-                var libPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "External", platformFolder, subfolder, libraryName);
+                var libPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "External", DllLoader.PlatformFolder, subfolder, DllLoader.NativeFileName(libraryName));
 
                 if (File.Exists(libPath)) {
                     Logger.Debug($"NativeLibraryResolver: Loading {libPath}");

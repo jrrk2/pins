@@ -30,9 +30,37 @@ namespace NINA.Core.Utility {
         [DllImport("libdl.so.2", CallingConvention = CallingConvention.Cdecl)]
         private static extern IntPtr dlerror();
 
-        // dlopen flags
+        [DllImport("libSystem.dylib", EntryPoint = "dlopen", CallingConvention = CallingConvention.Cdecl)]
+        private static extern IntPtr dlopenMac(string filename, int flags);
+
+        [DllImport("libSystem.dylib", EntryPoint = "dlerror", CallingConvention = CallingConvention.Cdecl)]
+        private static extern IntPtr dlerrorMac();
+
+        // dlopen flags; RTLD_GLOBAL differs between glibc and macOS
         private const int RTLD_NOW = 2;
-        private const int RTLD_GLOBAL = 0x100;
+        private static readonly int RTLD_GLOBAL = OperatingSystem.IsMacOS() ? 0x8 : 0x100;
+
+        /// <summary>
+        /// The folder under External that holds this platform's libraries, by .NET runtime identifier: linux-x64, osx-arm64, win-x64 and so on.
+        /// </summary>
+        public static string PlatformFolder {
+            get {
+                var os = OperatingSystem.IsMacOS() ? "osx" : OperatingSystem.IsWindows() ? "win" : "linux";
+                return $"{os}-{RuntimeInformation.ProcessArchitecture.ToString().ToLower()}";
+            }
+        }
+
+        /// <summary>
+        /// This platform's name for a library the code names as on Linux: libnovas_c.so is libnovas_c.dylib on macOS and libnovas_c.dll on Windows.
+        /// </summary>
+        public static string NativeFileName(string linuxName) {
+            if (!linuxName.EndsWith(".so", StringComparison.Ordinal)) {
+                return linuxName;
+            }
+            return OperatingSystem.IsMacOS() ? Path.ChangeExtension(linuxName, ".dylib")
+                : OperatingSystem.IsWindows() ? Path.ChangeExtension(linuxName, ".dll")
+                : linuxName;
+        }
 
         private static object lockobj = new object();
         private static System.Collections.Generic.HashSet<string> loadedDlls = new System.Collections.Generic.HashSet<string>();
@@ -46,26 +74,25 @@ namespace NINA.Core.Utility {
                     return;
                 }
 
-                var arch = RuntimeInformation.ProcessArchitecture.ToString().ToLower();
-                var platformFolder = IsX86() ? $"linux-{arch}" : $"linux-{arch}";
-                var extension = ".so";
+                var requested = dllSubPath;
 
                 // Add extension if not present
                 if (!Path.HasExtension(dllSubPath)) {
-                    dllSubPath = Path.ChangeExtension(dllSubPath, extension);
+                    dllSubPath = Path.ChangeExtension(dllSubPath, ".so");
                 }
+                // P/Invoke asks for the library by its Linux name, which is how the resolver below finds it on every platform
+                var importName = Path.GetFileName(dllSubPath);
+                dllSubPath = Path.Combine(Path.GetDirectoryName(dllSubPath) ?? string.Empty, NativeFileName(importName));
 
                 // Try bundled library first
-                var path = Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "External", platformFolder, dllSubPath);
+                var path = Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "External", PlatformFolder, dllSubPath);
                 if (File.Exists(path)) {
                     Logger.Info($"DllLoader: Loading bundled library: {path}");
                     if (LoadDllFromAbsolutePath(path)) {
-                        loadedDlls.Add(dllSubPath);
+                        loadedDlls.Add(requested);
                         // Track the library by filename for P/Invoke resolution
-                        var libName = Path.GetFileName(path);
-                        if (!libraryPathMap.ContainsKey(libName)) {
-                            libraryPathMap[libName] = path;
-                        }
+                        libraryPathMap.TryAdd(importName, path);
+                        libraryPathMap.TryAdd(Path.GetFileName(path), path);
                         EnsureResolverRegistered();
                         return;
                     }
@@ -76,7 +103,7 @@ namespace NINA.Core.Utility {
                 Logger.Info($"DllLoader: Trying system library via LD_LIBRARY_PATH: {libraryName}");
 
                 if (LoadDllFromAbsolutePath(libraryName, global: true)) {
-                    loadedDlls.Add(dllSubPath);
+                    loadedDlls.Add(requested);
                     EnsureResolverRegistered();
                 }
             }
@@ -128,10 +155,17 @@ namespace NINA.Core.Utility {
                     flags |= RTLD_GLOBAL;
                 }
 
-                // Linux implementation
-                handle = dlopen(dllPath, flags);
+                if (OperatingSystem.IsWindows()) {
+                    if (NativeLibrary.TryLoad(dllPath, out _)) {
+                        return true;
+                    }
+                    Logger.Error($"DllLoader failed to load library {dllPath}");
+                    return false;
+                }
+
+                handle = OperatingSystem.IsMacOS() ? dlopenMac(dllPath, flags) : dlopen(dllPath, flags);
                 if (handle == IntPtr.Zero) {
-                    var errorPtr = dlerror();
+                    var errorPtr = OperatingSystem.IsMacOS() ? dlerrorMac() : dlerror();
                     var errorMessage = errorPtr != IntPtr.Zero ? Marshal.PtrToStringAnsi(errorPtr) : "Unknown error";
                     var message = $"DllLoader failed to load library {dllPath}: {errorMessage}";
                     Logger.Error(message);
@@ -142,16 +176,13 @@ namespace NINA.Core.Utility {
         }
 
         public static FileVersionInfo DllVersion(string dllSubPath) {
-            var arch = RuntimeInformation.ProcessArchitecture.ToString().ToLower();
-            var platformFolder = IsX86() ? $"linux-{arch}" : $"linux-{arch}";
-            var extension = ".so";
-
             // Add extension if not present
             if (!Path.HasExtension(dllSubPath)) {
-                dllSubPath = Path.ChangeExtension(dllSubPath, extension);
+                dllSubPath = Path.ChangeExtension(dllSubPath, ".so");
             }
+            dllSubPath = Path.Combine(Path.GetDirectoryName(dllSubPath) ?? string.Empty, NativeFileName(Path.GetFileName(dllSubPath)));
 
-            var path = Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "External", platformFolder, dllSubPath);
+            var path = Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "External", PlatformFolder, dllSubPath);
 
             // On Unix-like systems, FileVersionInfo might not work well with native libraries
             // Return a minimal version info if the file exists
