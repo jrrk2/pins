@@ -6,7 +6,8 @@
 #   make release-test             unpack that .deb, run it against the simulator and drive it through the Advanced API (packaging/smoke-test-release.py)
 #   make test                     the unit tests
 #   make test-sim                 the tests that drive the simulator, which take tens of minutes at the real speeds (SIM_TESTS picks them)
-#   make publish NOTES=file.md    tag the commit built and publish the .deb as a GitHub pre-release
+#   make publish                  tag the commit the .deb was built from and publish it as a GitHub pre-release, with the notes in
+#                                 packaging/release-notes/origin<N>.md (NOTES=file overrides)
 #   make simulator / sim-start / sim-stop
 #
 # DOTNET_DIR names a .NET SDK to use (default .tools/dotnet, where make deps installs one when the machine has none). SIM_DIR names a checkout of
@@ -29,6 +30,9 @@ ITERATION ?= $(shell echo $$(( $(or $(LAST_ITERATION),0) + 1 )))
 DEB := artifacts/pins-origin_$(VERSION)+origin$(ITERATION)_amd64.deb
 TAG := v$(TAG_VERSION)-origin$(ITERATION)
 REPO ?= jrrk2/pins
+NOTES ?= packaging/release-notes/origin$(ITERATION).md
+# The package is for Ubuntu 24.04 and later, and Debian 13: a .deb that needs a newer C library than 24.04's was built on too new a system.
+OLDEST_GLIBC ?= 2.39
 
 SIM_PINNED := $(CURDIR)/artifacts/src/OriginSimulator
 SIM_DIR ?= $(SIM_PINNED)
@@ -50,8 +54,10 @@ API := NINA.Plugins/ninaAPI/ninaAPI
 deps:
 	packaging/fetch-deps.sh build
 
+# The commit built goes next to the .deb, for make publish to tag (marked dirty if tracked files had changes).
 release: plugins
 	$(DOTNET_ENV) packaging/build-portable-deb.sh $(ITERATION)
+	echo "$$(git rev-parse HEAD)$$([[ -z "$$(git status --porcelain --untracked-files=no)" ]] || echo -dirty)" > $(DEB).commit
 
 plugins: deps
 	$(DOTNET_ENV) dotnet build $(API)/ninaAPI.csproj -c Release -r $(RUNTIME) -v q
@@ -79,13 +85,29 @@ test-sim:
 	ORIGIN_SIM=127.0.0.1:$(SIM_PORT) $(DOTNET_ENV) dotnet test NINA.Test/NINA.Test.csproj --filter "$(subst |,|FullyQualifiedName~,FullyQualifiedName~$(SIM_TESTS))" \
 	  --logger "console;verbosity=detailed"
 
+# The .deb may be built on another machine and copied here with its .sha256 and .commit. Commits since the build may change only the release notes.
 publish:
-	[[ -f "$(DEB)" && -f "$(DEB).sha256" ]] || { echo "[ERROR] No $(DEB): make release first, or give ITERATION" >&2; exit 1; }
-	[[ -n "$(NOTES)" && -f "$(NOTES)" ]] || { echo "[ERROR] Give the release notes: make publish NOTES=file.md" >&2; exit 1; }
-	[[ -z "$$(git status --porcelain --untracked-files=no)" ]] || { echo "[ERROR] Uncommitted changes: the tag would not be what was built" >&2; exit 1; }
-	git tag $(TAG)
+	for f in $(DEB) $(DEB).sha256 $(DEB).commit; do
+	  [[ -f "$$f" ]] || { echo "[ERROR] No $$f: make release first (on Ubuntu 24.04), or give ITERATION" >&2; exit 1; }
+	done
+	(cd $(dir $(DEB)) && sha256sum --quiet -c $(notdir $(DEB)).sha256)
+	built=$$(cat $(DEB).commit)
+	[[ "$$built" != *-dirty ]] || { echo "[ERROR] $(DEB) was built with uncommitted changes" >&2; exit 1; }
+	git merge-base --is-ancestor $$built HEAD || { echo "[ERROR] $(DEB) was built from $$built, which this branch does not contain" >&2; exit 1; }
+	git diff --quiet $$built HEAD -- . ':(exclude)packaging/release-notes' \
+	  || { echo "[ERROR] Commits since $(DEB) was built ($$built) change more than release notes: make release again" >&2; exit 1; }
+	[[ -f "$(NOTES)" ]] || { echo "[ERROR] No release notes $(NOTES): write them, or give NOTES=file" >&2; exit 1; }
+	glibc=$$(dpkg-deb -f $(DEB) Depends | sed -n 's/.*libc6 (>= \([0-9.]*\)).*/\1/p')
+	dpkg --compare-versions "$${glibc:-0}" le $(OLDEST_GLIBC) \
+	  || { echo "[ERROR] $(DEB) needs libc6 $$glibc, newer than Ubuntu 24.04's $(OLDEST_GLIBC): build it on Ubuntu 24.04" >&2; exit 1; }
+	git branch -r --contains $$built | grep -q . || { echo "[ERROR] Push $$built to GitHub first" >&2; exit 1; }
+	if git rev-parse -q --verify refs/tags/$(TAG) >/dev/null; then
+	  [[ "$$(git rev-list -n 1 $(TAG))" == "$$built" ]] || { echo "[ERROR] Tag $(TAG) exists on another commit" >&2; exit 1; }
+	else
+	  git tag $(TAG) $$built
+	fi
 	git push origin $(TAG)
-	gh release create $(TAG) -R $(REPO) --prerelease --title "PI.N.S. for Celestron Origin, test build origin$(ITERATION)" \
+	gh release create $(TAG) -R $(REPO) --prerelease --verify-tag --title "PI.N.S. for Celestron Origin, test build origin$(ITERATION)" \
 	  --notes-file $(NOTES) $(DEB) $(DEB).sha256
 
 # The pinned simulator is fetched, or moved to the pin, first; the build then sees its sources as they are.
