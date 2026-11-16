@@ -52,18 +52,23 @@ def api_up():
 wait("Advanced API answering", api_up, 180)
 print(f"  PI.N.S. {ok('/version/pins')}")
 # Touch-N-Stars takes the first free port from 5000. On a Mac, AirPlay Receiver usually holds 5000 (and answers 403 as AirTunes), so it is 5001 there.
+# It starts a few seconds after the Advanced API.
+tns_port = None
 def touch_n_stars():
+    global tns_port
     for port in range(5000, 5010):
         try:
             urllib.request.urlopen(f"http://localhost:{port}/", timeout=10).read(1)
-            return port
+            tns_port = port
+            return True
         except urllib.error.HTTPError as e:
             if not e.headers.get("Server", "").startswith("AirTunes"):
                 raise SystemExit(f"FAIL Touch-N-Stars on port {port}: {e}")
         except (urllib.error.URLError, OSError):
             pass
-    raise SystemExit("FAIL Touch-N-Stars answering on none of ports 5000-5009")
-print(f"  Touch-N-Stars answering on port {touch_n_stars()}")
+    return False
+wait("Touch-N-Stars answering", touch_n_stars, 60)
+print(f"  on port {tns_port}")
 
 step("Setting the site")
 for name, value in SITE.items():
