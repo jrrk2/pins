@@ -1,0 +1,7 @@
+// Lets the Pi's user scan for Wi-Fi from an SSH login, which polkit otherwise refuses as not a local session: without it the list shows
+// only the access point already joined (2026-11-16).
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.NetworkManager.wifi.scan" && subject.isInGroup("netdev")) {
+        return polkit.Result.YES;
+    }
+});

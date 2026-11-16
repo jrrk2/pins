@@ -1,0 +1,13 @@
+[Unit]
+Description=PI.N.S. for the Celestron Origin, as %i
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=%i
+ExecStart=/usr/bin/pins
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

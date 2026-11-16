@@ -1,0 +1,14 @@
+# The Origin plugs into the Pi's Ethernet port and expects DHCP: shared mode gives the port 10.42.0.1, serves addresses on it, and routes
+# the telescope's own traffic out through the Wi-Fi. Broadcasts, as the Origin's discovery on UDP 55555, are not routed.
+[connection]
+id=Origin Ethernet
+type=ethernet
+interface-name=eth0
+autoconnect=true
+autoconnect-priority=10
+
+[ipv4]
+method=shared
+
+[ipv6]
+method=ignore

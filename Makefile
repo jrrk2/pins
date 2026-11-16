@@ -10,6 +10,8 @@
 #   make publish                  tag the commit the package was built from and publish it as a GitHub pre-release (or add it to the release
 #                                 another machine published), with the notes in
 #                                 packaging/release-notes/origin<N>.md (NOTES=file overrides)
+#   make pi-image                 a Raspberry Pi OS Lite image for Raspberry Pi Imager carrying the arm64 package (DEB=file overrides),
+#                                 which its first boot installs (packaging/build-pi-image.sh); needs no root, so it builds on any Linux
 #   make simulator / sim-start / sim-stop
 #
 # DOTNET_DIR names a .NET SDK to use (default .tools/dotnet, where make deps installs one when the machine has none). SIM_DIR names a checkout of
@@ -78,7 +80,7 @@ INDEX_DIR ?= $(patsubst %/,%,$(dir $(firstword $(foreach d,$(INDEX_DIRS),$(wildc
 TNS := NINA.Plugins/Touch-N-Stars/Touch-N-Stars
 API := NINA.Plugins/ninaAPI/ninaAPI
 
-.PHONY: deps release plugins release-test test test-sim publish simulator sim-build sim-start sim-stop
+.PHONY: deps release plugins release-test test test-sim publish pi-image simulator sim-build sim-start sim-stop
 
 deps:
 	packaging/fetch-deps.sh build
@@ -117,6 +119,11 @@ test-sim:
 	  --logger "console;verbosity=detailed"
 
 # The package may be built on another machine and copied here with its .sha256 and .commit. Commits since the build may change only the release notes.
+DEB ?= artifacts/pins-origin_$(VERSION)+origin$(ITERATION)_arm64.deb
+
+pi-image:
+	packaging/build-pi-image.sh $(DEB)
+
 publish:
 	for f in $(PACKAGE) $(PACKAGE).sha256 $(PACKAGE).commit; do
 	  [[ -f "$$f" ]] || { echo "[ERROR] No $$f: make release first, or give ITERATION" >&2; exit 1; }

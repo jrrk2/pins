@@ -1,0 +1,15 @@
+[Unit]
+Description=Install PI.N.S. on the first boot of its Raspberry Pi image
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=!/var/lib/pins-image-installed
+
+[Service]
+Type=oneshot
+ExecStart=/opt/pins-image/pins-firstboot.sh
+# tried again at every boot until it succeeds (no internet, say)
+RemainAfterExit=yes
+TimeoutStartSec=1h
+
+[Install]
+WantedBy=multi-user.target
