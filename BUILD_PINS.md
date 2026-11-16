@@ -54,14 +54,19 @@ gmake release         # artifacts/pins-origin_<version>+origin<N>_macos-arm64.ta
 
 Homebrew's OpenCV is OpenCV 5, which OpenCvSharp 4 does not build against, and OpenCvSharp publishes no macOS runtime. So the first
 `gmake release` builds the OpenCV that OpenCvSharp's version was made for (4.11.0 for 4.11.0.20250507) from source, statically, into
-`artifacts/src/opencv-macos`, with its own image libraries rather than Homebrew's or MacPorts': about a quarter of an hour on an 8-core M-series
-Mac. The OpenCvSharpExtern built against it links nothing but macOS itself.
+`artifacts/src/opencv-macos`, with its own image libraries rather than Homebrew's or MacPorts': about four minutes on an 8-core M-series
+Mac (2026-11-16). The OpenCvSharpExtern built against it links nothing but macOS itself.
 
 `packaging/build-macos-package.sh` makes a `pins/` folder: the application in `pins/app` (with Homebrew's cfitsio and libraw and the libraries they
 need copied into it), the plugins, and the `pins/pins` launcher, which copies the plugins into `~/Library/Application Support/NINA` (.NET's
 local application data folder on macOS) and starts PINS from there. Everything is signed ad hoc, which Apple Silicon requires; nothing is
 notarised, so a copy downloaded with a browser needs `xattr -dr com.apple.quarantine pins` before it will run. The package runs on the macOS it
-was built on and later ones; the Mac it runs on needs `brew install astrometry-net` and the index files.
+was built on and later ones; the Mac it runs on needs `brew install astrometry-net` and the index files. macOS's AirPlay Receiver usually
+holds port 5000, so Touch-N-Stars takes 5001, and the launcher says which.
+
+On macOS .NET finds `~/Library/Application Support` through the system, ignoring `HOME`, so PINS makes its data folder from `HOME` itself
+(`CoreUtil.LocalApplicationData`) and `make release-test`'s run keeps to its own home. The Touch-N-Stars plugin still asks .NET, so a test run
+leaves its empty `AutoFocus` and `TnsCache` folders in the real `~/Library/Application Support/NINA`.
 
 To try it on OriginSimulator: `brew install qt libnova libtiff astrometry-net`, the index files for the Origin's field (Homebrew has none:
 `for i in 08 09 10 11; do curl -fLO https://data.astrometry.net/4200/index-42$i.fits; done` in `~/astrometry_indices`, or anywhere given as

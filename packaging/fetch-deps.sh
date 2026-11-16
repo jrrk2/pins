@@ -237,7 +237,7 @@ build_opencvsharp_extern_macos() {
   local clean=(env -u CPATH -u LIBRARY_PATH -u PKG_CONFIG_PATH -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH)
   local ignore="-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/opt/local;/usr/local"
   if [[ ! -f "$build/install/lib/cmake/opencv4/OpenCVConfig.cmake" ]]; then
-    log "Building OpenCV $opencv, static, for OpenCvSharp $tag (a quarter of an hour)"
+    log "Building OpenCV $opencv, static, for OpenCvSharp $tag (a few minutes)"
     rm -rf "$build"
     git clone -q --depth 1 --branch "$opencv" https://github.com/opencv/opencv "$build/opencv"
     git clone -q --depth 1 --branch "$opencv" https://github.com/opencv/opencv_contrib "$build/opencv_contrib"

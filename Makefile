@@ -85,8 +85,9 @@ deps:
 
 # The commit built goes next to the package, for make publish to tag (marked dirty if tracked files had changes).
 release: plugins
+	built="$$(git rev-parse HEAD)$$([[ -z "$$(git status --porcelain --untracked-files=no)" ]] || echo -dirty)"
 	$(DOTNET_ENV) $(PACKAGER) $(ITERATION)
-	echo "$$(git rev-parse HEAD)$$([[ -z "$$(git status --porcelain --untracked-files=no)" ]] || echo -dirty)" > $(PACKAGE).commit
+	echo "$$built" > $(PACKAGE).commit
 
 # PinsRoot: the Touch-N-Stars plugin builds against this repository rather than N.I.N.A.'s Windows packages, as it does by itself only on Linux.
 plugins: deps
