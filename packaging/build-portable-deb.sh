@@ -22,6 +22,8 @@ case "$(uname -m)" in
   aarch64|arm64) RUNTIME=linux-arm64 ;;
   *) echo "[ERROR] No .NET runtime for $(uname -m)" >&2; exit 1 ;;
 esac
+# ldconfig is in /sbin, which Debian, unlike Ubuntu, leaves off a user's PATH
+export PATH="$PATH:/usr/sbin:/sbin"
 ARCH="$(dpkg --print-architecture)"
 MULTIARCH="$(gcc -print-multiarch)"    # where the distribution keeps this architecture's libraries, as x86_64-linux-gnu
 WORK=artifacts/portable-deb
