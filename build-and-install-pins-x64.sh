@@ -830,7 +830,13 @@ build_opencvsharp_extern() {
   # Some distribution packages ship libopencv_xfeatures2d and its subfolder, but not this top-level header.
   local extra_cxx_flags=""
   local opencv_prefix="${opencv_dir%%/lib/*}"
-  if [[ ! -f "$opencv_prefix/include/opencv4/opencv2/xfeatures2d.hpp" ]]; then
+  if [[ ! -d "$opencv_prefix/include/opencv4/opencv2/xfeatures2d" ]]; then
+    # Others, as Ubuntu 26.04's, leave out xfeatures2d altogether. N.I.N.A. does not use it, so the wrapper goes without it: its entry points
+    # would fail only if called.
+    log "OpenCV has no xfeatures2d module; building OpenCvSharpExtern without it"
+    sed -i '/#include <opencv2\/xfeatures2d.hpp>/d' "$OPENCVSHARP_WORKDIR/src/OpenCvSharpExtern/include_opencv.h"
+    rm -f "$OPENCVSHARP_WORKDIR/src/OpenCvSharpExtern/xfeatures2d.cpp"
+  elif [[ ! -f "$opencv_prefix/include/opencv4/opencv2/xfeatures2d.hpp" ]]; then
     local extra_include="$workdir_abs/extra-include"
     mkdir -p "$extra_include/opencv2"
     log "opencv2/xfeatures2d.hpp is missing; fetching it from opencv_contrib $opencv_version"
