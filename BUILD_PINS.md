@@ -35,11 +35,37 @@ make release-test
 ```
 
 The .deb installs on the release it was built on and later ones (it needs that system's C library, and bundles its OpenCV); on other
-systems, build it from a clone as above. `make release` records the commit it built in `<deb>.commit`. `make publish` tags that commit and uploads the .deb as a GitHub
-pre-release with the notes in `packaging/release-notes/origin<N>.md` (`NOTES=file` overrides). It needs `gh` logged in, and refuses a .deb whose
-checksum does not match, that was built from uncommitted changes, or whose commit is
-not pushed or differs from `HEAD` in more than the release notes. So the notes can be committed after the build, and the .deb, `.sha256` and
-`.commit` can be copied from the machine that built them to publish from another.
+systems, build it from a clone as above. `make release` records the commit it built in `<package>.commit`. `make publish` tags that commit and uploads the package as a GitHub
+pre-release with the notes in `packaging/release-notes/origin<N>.md` (`NOTES=file` overrides), or adds it to that release when another machine
+has published it already. It needs `gh` logged in, and refuses a package whose checksum does not match, that was built from uncommitted changes,
+or whose commit is not pushed or differs from `HEAD` in more than the release notes. So the notes can be committed after the build, and the
+package, `.sha256` and `.commit` can be copied from the machine that built them to publish from another.
+
+### On a Mac
+
+The same targets build `pins-origin_<version>+origin<N>_macos-arm64.tar.gz` on a Mac (Apple Silicon; an Intel Mac would make `macos-x64`), with
+[Homebrew](https://brew.sh) and Xcode's command line tools. macOS's own `make` is too old for the Makefile: use Homebrew's `gmake`.
+
+```bash
+git clone -b origin-direct-driver https://github.com/jrrk2/pins.git && cd pins
+brew install make cmake cfitsio libraw hidapi
+gmake release         # artifacts/pins-origin_<version>+origin<N>_macos-arm64.tar.gz
+```
+
+Homebrew's OpenCV is OpenCV 5, which OpenCvSharp 4 does not build against, and OpenCvSharp publishes no macOS runtime. So the first
+`gmake release` builds the OpenCV that OpenCvSharp's version was made for (4.11.0 for 4.11.0.20250507) from source, statically, into
+`artifacts/src/opencv-macos`, with its own image libraries rather than Homebrew's or MacPorts': about a quarter of an hour on an 8-core M-series
+Mac. The OpenCvSharpExtern built against it links nothing but macOS itself.
+
+`packaging/build-macos-package.sh` makes a `pins/` folder: the application in `pins/app` (with Homebrew's cfitsio and libraw and the libraries they
+need copied into it), the plugins, and the `pins/pins` launcher, which copies the plugins into `~/Library/Application Support/NINA` (.NET's
+local application data folder on macOS) and starts PINS from there. Everything is signed ad hoc, which Apple Silicon requires; nothing is
+notarised, so a copy downloaded with a browser needs `xattr -dr com.apple.quarantine pins` before it will run. The package runs on the macOS it
+was built on and later ones; the Mac it runs on needs `brew install astrometry-net` and the index files.
+
+To try it on OriginSimulator: `brew install qt libnova libtiff astrometry-net`, the index files for the Origin's field (Homebrew has none:
+`for i in 08 09 10 11; do curl -fLO https://data.astrometry.net/4200/index-42$i.fits; done` in `~/astrometry_indices`, or anywhere given as
+`INDEX_DIR`), then `gmake release-test`.
 
 Moving a pin is a commit to `packaging/deps.env`. Delete what it governs (the plugin checkout, `NINA.Plugins/Touch-N-Stars/Touch-N-Stars/app`, or `NINA/External`) for the next `make deps` to fetch it again.
 
