@@ -119,7 +119,8 @@ cat > "$ROOT/usr/bin/pins" <<'LAUNCHER'
 #!/bin/sh
 # Starts PINS. Its plugins live in each user's data folder, so they are copied there when this version first runs.
 set -e
-app=/opt/pins
+# /opt/pins when installed; next to usr/bin in an unpacked copy of the package, so a build can be tried without installing it.
+app="$(dirname "$(readlink -f "$0")")/../../opt/pins"
 plugins="$HOME/.local/share/NINA/Plugins/3.0.0"
 if ! cmp -s "$app/plugins/.version" "$plugins/.pins-version"; then
     mkdir -p "$plugins"
@@ -155,6 +156,6 @@ CONTROL
 
 deb="artifacts/pins-origin_${package_version}_amd64.deb"
 dpkg-deb --root-owner-group -Zxz --build "$ROOT" "$deb"
-sha256sum "$deb" > "$deb.sha256"
+(cd "$(dirname "$deb")" && sha256sum "$(basename "$deb")" > "$(basename "$deb").sha256")    # no artifacts/ prefix, so sha256sum -c works next to a download
 du -sh "$OPT" "$deb"
 echo "[INFO] Built $deb"
