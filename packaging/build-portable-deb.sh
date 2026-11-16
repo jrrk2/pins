@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Builds a self-contained .deb of PINS (amd64 or arm64, as the machine it runs on) with Touch-N-Stars, for trying on another computer.
+# Builds a .deb of PINS (amd64 or arm64, as the machine it runs on) with Touch-N-Stars, installing to /opt/pins for any user.
 #
-# Unlike build-and-install-pins-x64.sh, which targets the machine it runs on, this installs to /opt/pins for any user and carries
-# the OpenCV stack it was built against in /opt/pins/lib, so the target needs no particular OpenCV. It needs a glibc at least as
-# new as the build machine's, and pulls in the handful of libraries in Depends.
+# LIBRARIES says where the native libraries come from:
+#   bundled  (the default on amd64) /opt/pins/lib carries the OpenCV stack it was built against, so the target needs no particular OpenCV.
+#            It needs a glibc at least as new as the build machine's, and pulls in the handful of libraries in Depends.
+#   system   (the default on arm64, where the package goes into a Raspberry Pi's disk image) the distribution's own libraries, named in
+#            Depends, for installing with apt on the release the package was built on.
 #
 # Expects:
 #   NINA.Plugins/Touch-N-Stars and NINA.Plugins/ninaAPI built for Release/net10.0/linux-<arch> (see BUILD_PINS.md),
@@ -11,7 +13,7 @@
 #   NINA/External/linux-<arch> holding NOVAS, SOFA and an OpenCvSharpExtern built locally (see build_opencvsharp_extern in
 #   build-and-install-pins-x64.sh)
 #
-# Usage: packaging/build-portable-deb.sh [iteration]    The result goes in artifacts/.
+# Usage: [LIBRARIES=bundled|system] packaging/build-portable-deb.sh [iteration]    The result goes in artifacts/.
 set -Eeuo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -25,6 +27,8 @@ esac
 # ldconfig is in /sbin, which Debian, unlike Ubuntu, leaves off a user's PATH
 export PATH="$PATH:/usr/sbin:/sbin"
 ARCH="$(dpkg --print-architecture)"
+LIBRARIES="${LIBRARIES:-$([[ "$RUNTIME" == linux-arm64 ]] && echo system || echo bundled)}"
+[[ "$LIBRARIES" == bundled || "$LIBRARIES" == system ]] || { echo "[ERROR] LIBRARIES is bundled or system, not $LIBRARIES" >&2; exit 1; }
 MULTIARCH="$(gcc -print-multiarch)"    # where the distribution keeps this architecture's libraries, as x86_64-linux-gnu
 WORK=artifacts/portable-deb
 PUBLISH="$WORK/publish"
@@ -64,19 +68,37 @@ cp -f "$EXTERN" "$OPT/libOpenCvSharpExtern.so"
 cp -f "$EXTERN" "$OPT/OpenCvSharpExtern.so"
 rm -f "$OPT/External/$RUNTIME/libOpenCvSharpExtern.so"
 
-# Libraries the application opens by these unversioned names, which on a normal system only the -dev packages provide.
+# Libraries the application opens by these unversioned names, which on a normal system only the -dev packages provide: copied, or, with
+# the system's libraries, linked to the library the runtime package provides (libraw.so to libraw.so.23).
 bundle_by_name() {
   local name="$1"
   local path
   path="$(ldconfig -p | awk -v n="$name" '$1 == n { print $NF; exit }')"
   [[ -n "$path" ]] || fail "$name not found; install its development package"
+  if [[ "$LIBRARIES" == system ]]; then
+    local soname
+    soname="$(objdump -p "$path" | awk '$1 == "SONAME" { print $2 }')"
+    [[ -n "$soname" ]] || fail "$path has no SONAME"
+    ln -sf "/usr/lib/$MULTIARCH/$soname" "$OPT/External/$RUNTIME/$name"
+    ln -sf "/usr/lib/$MULTIARCH/$soname" "$OPT/lib/$name"
+    echo "$(dirname "$(readlink -f "$path")")/$soname"
+    return
+  fi
   cp -L "$path" "$OPT/External/$RUNTIME/$name"
   # Some are opened through LD_LIBRARY_PATH by this name, so the launcher's library folder needs it too.
   cp -L "$path" "$OPT/lib/$name"
   echo "$OPT/External/$RUNTIME/$name"
 }
 
-echo "[INFO] Bundling libraries"
+# The package that provides a library, as libopencv-core410
+package_of() {
+  local path="$1" owner
+  owner="$(dpkg -S "$path" 2>/dev/null || dpkg -S "$(readlink -f "$path")" 2>/dev/null || dpkg -S "/usr$path" 2>/dev/null)" ||
+    fail "No package provides $path"
+  echo "${owner%%:*}"
+}
+
+echo "[INFO] Bundling libraries ($LIBRARIES)"
 sources=("$EXTERN" "$(bundle_by_name libraw.so)" "$(bundle_by_name libcfitsio.so)" "$(bundle_by_name libhidapi-hidraw.so)")
 
 # glibc comes from the target, and must match its own loader. libssl keeps its security updates by coming from the target too.
@@ -89,19 +111,34 @@ is_target_library() {
   esac
 }
 
-for source in "${sources[@]}"; do
-  while read -r name _ path _; do
-    [[ -n "${path:-}" && "$path" == /* ]] || continue
-    is_target_library "$name" && continue
-    [[ -e "$OPT/lib/$name" ]] || cp -L "$path" "$OPT/lib/$name"
-  done < <(env -u LD_LIBRARY_PATH ldd "$source")
-done
-chmod -R u+w "$OPT/lib"
-# Only the libraries the application opens: those in lib/ find each other through the launcher's LD_LIBRARY_PATH, and are left as they are,
-# because patchelf's rewrite breaks some of them (Debian 13's arm64 libprotobuf aborts on loading).
-for library in "$OPT/libOpenCvSharpExtern.so" "$OPT/OpenCvSharpExtern.so" "$OPT/External/$RUNTIME"/lib*.so; do
-  patchelf --set-rpath '$ORIGIN:$ORIGIN/lib:$ORIGIN/../../lib' "$library" 2>/dev/null || true
-done
+system_depends=()
+if [[ "$LIBRARIES" == system ]]; then
+  # The packages of the libraries these load directly; apt brings in what those need
+  declare -A seen=()
+  for source in "${sources[@]}"; do
+    [[ "$source" == "$EXTERN" ]] || seen["$(package_of "$source")"]=1
+    while read -r name _ path _; do
+      [[ -n "${path:-}" && "$path" == /* ]] || continue
+      seen["$(package_of "$path")"]=1
+    done < <(env -u LD_LIBRARY_PATH ldd "$source" | grep -F "$(readelf -d "$source" | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/\1/p')")
+  done
+  unset 'seen[libc6]'    # in Depends already, with its version
+  mapfile -t system_depends < <(printf '%s\n' "${!seen[@]}" | sort)
+else
+  for source in "${sources[@]}"; do
+    while read -r name _ path _; do
+      [[ -n "${path:-}" && "$path" == /* ]] || continue
+      is_target_library "$name" && continue
+      [[ -e "$OPT/lib/$name" ]] || cp -L "$path" "$OPT/lib/$name"
+    done < <(env -u LD_LIBRARY_PATH ldd "$source")
+  done
+  chmod -R u+w "$OPT/lib"
+  # Only the libraries the application opens: those in lib/ find each other through the launcher's LD_LIBRARY_PATH, and are left as they
+  # are, because patchelf's rewrite breaks some of them (Debian 13's arm64 libprotobuf aborts on loading).
+  for library in "$OPT/libOpenCvSharpExtern.so" "$OPT/OpenCvSharpExtern.so" "$OPT/External/$RUNTIME"/lib*.so; do
+    patchelf --set-rpath '$ORIGIN:$ORIGIN/lib:$ORIGIN/../../lib' "$library" 2>/dev/null || true
+  done
+fi
 
 # libgphoto2 finds its camera and port drivers in folders of the system's own installation, so it is not bundled, even for OpenCV. It comes
 # from the runtime packages in Depends, and these links stand in for the unversioned names that only libgphoto2-dev provides.
@@ -157,7 +194,7 @@ Priority: optional
 Architecture: $ARCH
 Maintainer: PINS Team
 Installed-Size: $installed_size
-Depends: libc6 (>= $(ldd --version | sed -n '1s/.* \([0-9]*\.[0-9]*\).*/\1/p')), libssl3t64 | libssl3, libudev1, libusb-1.0-0, libgphoto2-6t64 | libgphoto2-6, libgphoto2-port12t64 | libgphoto2-port12
+Depends: libc6 (>= $(ldd --version | sed -n '1s/.* \([0-9]*\.[0-9]*\).*/\1/p')), libssl3t64 | libssl3, libudev1, libusb-1.0-0, libgphoto2-6t64 | libgphoto2-6, libgphoto2-port12t64 | libgphoto2-port12${system_depends[*]:+$(printf ', %s' "${system_depends[@]}")}
 Recommends: astrometry-data-tycho2-07-littleendian | astrometry-data-tycho2-07
 Conflicts: pins
 Description: PI.N.S. with Touch-N-Stars and Celestron Origin drivers
