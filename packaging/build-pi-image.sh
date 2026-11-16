@@ -30,7 +30,7 @@ fail() {
   exit 1
 }
 
-[[ -f "$DEB" ]] || fail "$DEB not found"
+[[ -f "$DEB" ]] || fail "$DEB not found: build it on a Raspberry Pi (make release there, see BUILD_PINS.md) and copy it here, or name another with DEB=..."
 [[ "$(dpkg-deb -f "$DEB" Architecture)" == arm64 ]] || fail "$DEB is not an arm64 package"
 for tool in curl xz sfdisk debugfs e2fsck resize2fs dpkg-deb; do
   command -v "$tool" >/dev/null || fail "Missing $tool"
