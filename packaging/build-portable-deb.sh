@@ -97,7 +97,9 @@ for source in "${sources[@]}"; do
   done < <(env -u LD_LIBRARY_PATH ldd "$source")
 done
 chmod -R u+w "$OPT/lib"
-for library in "$OPT/lib"/* "$OPT/libOpenCvSharpExtern.so" "$OPT/OpenCvSharpExtern.so" "$OPT/External/$RUNTIME"/lib*.so; do
+# Only the libraries the application opens: those in lib/ find each other through the launcher's LD_LIBRARY_PATH, and are left as they are,
+# because patchelf's rewrite breaks some of them (Debian 13's arm64 libprotobuf aborts on loading).
+for library in "$OPT/libOpenCvSharpExtern.so" "$OPT/OpenCvSharpExtern.so" "$OPT/External/$RUNTIME"/lib*.so; do
   patchelf --set-rpath '$ORIGIN:$ORIGIN/lib:$ORIGIN/../../lib' "$library" 2>/dev/null || true
 done
 
