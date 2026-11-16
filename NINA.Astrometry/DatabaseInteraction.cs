@@ -38,7 +38,7 @@ namespace NINA.Astrometry {
         private string connectionString;
 
         public DatabaseInteraction()
-            : this(string.Format(@"Data Source={0};", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NINA", "NINA.sqlite"))) {
+            : this(string.Format(@"Data Source={0};", Path.Combine(NINA.Core.Utility.CoreUtil.APPLICATIONTEMPPATH, "NINA.sqlite"))) {
         }
 
         public DatabaseInteraction(string connectionString) {

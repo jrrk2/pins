@@ -138,8 +138,16 @@ if ! cmp -s "$here/plugins/.version" "$plugins/.pins-version"; then
     chmod -R u+w "$plugins/Touch-N-Stars" "$plugins/Advanced API"     # plugins write next to themselves, as Advanced API's temp.png
     cp -f "$here/plugins/.version" "$plugins/.pins-version"
 fi
+# Touch-N-Stars takes the first free port from 5000, which macOS's AirPlay Receiver usually holds
+port=5000
+while lsof -nP -iTCP:$port -sTCP:LISTEN > /dev/null 2>&1; do
+    port=$((port + 1))
+done
+if [ $port != 5000 ]; then
+    echo "Port 5000 is in use (on a Mac, by AirPlay Receiver: System Settings, General, AirDrop & Handoff), so Touch-N-Stars will be on port $port."
+fi
 address="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
-echo "PI.N.S. is starting. Open http://localhost:5000 in a browser${address:+, or http://$address:5000 from another device}. Stop it with Ctrl-C."
+echo "PI.N.S. is starting. Open http://localhost:$port in a browser${address:+, or http://$address:$port from another device}. Stop it with Ctrl-C."
 # astrometry.net's solve-field, from Homebrew or MacPorts, for plate solving
 export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:/opt/local/bin"
 # Not the application's folder, which may not be writable: PINS creates its INDI folder in the current directory.
