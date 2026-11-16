@@ -5,7 +5,8 @@
 #
 #   build   the .NET SDK and Node (under .tools/ when the machine has no suitable one), the ninaAPI and Touch-N-Stars plugins, the Touch-N-Stars
 #           frontend, and NINA/External (NOVAS and SOFA built from this repository, JPLEPH, an OpenCvSharpExtern built against the distribution's OpenCV)
-#   sim     OriginSimulator, in artifacts/src/OriginSimulator, for make release-test and make test-sim
+#   sim     OriginSimulator, in artifacts/src/OriginSimulator, for make release-test and make test-sim, and a check for the astrometry.net index
+#           files that Unpark's plate solve needs
 #
 # Usage: packaging/fetch-deps.sh [build] [sim]    (default: build)
 set -Eeuo pipefail
@@ -221,8 +222,8 @@ fetch_sim() {
   for dir in "$HOME/astrometry_indices" /usr/share/astrometry /usr/local/share/astrometry; do
     compgen -G "$dir/index-42[01][0-9]*.fits" > /dev/null && return
   done
-  warn "No astrometry.net index files for the Origin's field (4208-4211) in ~/astrometry_indices or /usr/share/astrometry: make release-test" \
-       "cannot plate solve. Install astrometry-data-2mass-08-19, or put the files in ~/astrometry_indices"
+  fail "No astrometry.net index files for the Origin's field (4208-4211), without which Unpark cannot plate solve. Install them with:"$'\n' \
+       " sudo apt-get install astrometry-data-2mass-08-19"$'\n'"or put the files in ~/astrometry_indices"
 }
 
 [[ $# -gt 0 ]] || set -- build
