@@ -18,6 +18,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace NINA.Core.Utility {
@@ -66,8 +67,11 @@ namespace NINA.Core.Utility {
         private static System.Collections.Generic.HashSet<string> loadedDlls = new System.Collections.Generic.HashSet<string>();
         private static Dictionary<string, string> libraryPathMap = new Dictionary<string, string>(); // Maps library name to full path
         private static bool _resolverRegistered = false;
+        private static readonly HashSet<Assembly> resolverAssemblies = new HashSet<Assembly>();
 
+        [MethodImpl(MethodImplOptions.NoInlining)]    // so that GetCallingAssembly is the assembly whose P/Invokes need the library
         public static void LoadDll(string dllSubPath) {
+            var caller = Assembly.GetCallingAssembly();
             lock (lockobj) {
                 // Check if already loaded
                 if (loadedDlls.Contains(dllSubPath)) {
@@ -93,7 +97,7 @@ namespace NINA.Core.Utility {
                         // Track the library by filename for P/Invoke resolution
                         libraryPathMap.TryAdd(importName, path);
                         libraryPathMap.TryAdd(Path.GetFileName(path), path);
-                        EnsureResolverRegistered();
+                        EnsureResolverRegistered(caller);
                         return;
                     }
                 }
@@ -104,7 +108,25 @@ namespace NINA.Core.Utility {
 
                 if (LoadDllFromAbsolutePath(libraryName, global: true)) {
                     loadedDlls.Add(requested);
-                    EnsureResolverRegistered();
+                    EnsureResolverRegistered(caller);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Registers the resolver on NINA.Equipment, for the vendor SDKs, and on the assembly that loaded the library, whose P/Invokes name it as on
+        /// Linux (NINA.Image's cfitsio and libraw): on Linux the system finds those names through LD_LIBRARY_PATH, on macOS and Windows only the
+        /// resolver can. An assembly with a resolver of its own (NINA.Astrometry, for NOVAS and SOFA) keeps it.
+        /// </summary>
+        private static void EnsureResolverRegistered(Assembly caller) {
+            lock (lockobj) {
+                EnsureResolverRegistered();
+                if (caller != null && resolverAssemblies.Add(caller)) {
+                    try {
+                        NativeLibrary.SetDllImportResolver(caller, ResolveLibrary);
+                    } catch (InvalidOperationException) {
+                        // it has its own
+                    }
                 }
             }
         }
@@ -119,10 +141,12 @@ namespace NINA.Core.Utility {
 
                         if (equipmentAssembly != null) {
                             NativeLibrary.SetDllImportResolver(equipmentAssembly, ResolveLibrary);
+                            resolverAssemblies.Add(equipmentAssembly);
                             Logger.Debug("DllLoader: Registered DllImportResolver on NINA.Equipment assembly");
                         } else {
                             // Fallback: register on this assembly
                             NativeLibrary.SetDllImportResolver(typeof(DllLoader).Assembly, ResolveLibrary);
+                            resolverAssemblies.Add(typeof(DllLoader).Assembly);
                             Logger.Debug("DllLoader: Registered DllImportResolver on NINA.Core assembly");
                         }
                     } catch (Exception ex) {
