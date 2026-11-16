@@ -34,10 +34,10 @@ sudo apt-get install qt6-base-dev libnova-dev libtiff-dev astrometry.net astrome
 make release-test
 ```
 
-A release is built on Ubuntu 24.04 (or KDE neon), the oldest system it is for: a .deb built on a newer one needs that system's C library and does not
-install on 24.04. `make release` records the commit it built in `<deb>.commit`. `make publish` tags that commit and uploads the .deb as a GitHub
+The .deb installs on the release it was built on and later ones (it needs that system's C library, and bundles its OpenCV); on other
+systems, build it from a clone as above. `make release` records the commit it built in `<deb>.commit`. `make publish` tags that commit and uploads the .deb as a GitHub
 pre-release with the notes in `packaging/release-notes/origin<N>.md` (`NOTES=file` overrides). It needs `gh` logged in, and refuses a .deb whose
-checksum does not match, that needs a newer C library than 24.04's (`OLDEST_GLIBC`), that was built from uncommitted changes, or whose commit is
+checksum does not match, that was built from uncommitted changes, or whose commit is
 not pushed or differs from `HEAD` in more than the release notes. So the notes can be committed after the build, and the .deb, `.sha256` and
 `.commit` can be copied from the machine that built them to publish from another.
 

@@ -1,6 +1,6 @@
 Tenth test build of PI.N.S. with native Celestron Origin camera, mount and focuser drivers, Touch-N-Stars and the Advanced API plugin. It replaces `origin9`.
 
-**Needs** Ubuntu 24.04 or newer, or Debian 13, on a 64-bit PC (amd64, not a Raspberry Pi).
+**Needs** Ubuntu 26.04 or newer on a 64-bit PC (amd64, not a Raspberry Pi). Earlier test builds installed on Ubuntu 24.04 and Debian 13; this one does not. On those, or any other Linux, build the package from source: see [Celestron Origin test package](https://github.com/jrrk2/pins/blob/origin-direct-driver/BUILD_PINS.md#celestron-origin-test-package-linux-x64-from-a-clean-clone) in `BUILD_PINS.md` (`make release`, about 5 minutes once the prerequisites are installed).
 
 ### Install and run
 1. `sudo apt install ./pins-origin_3.3.0.1058-nightly+origin10_amd64.deb` (this also installs the libgphoto2 libraries, and astrometry.net and its Tycho-2 index files, about 140 MB, which PI.N.S. now uses to plate solve).

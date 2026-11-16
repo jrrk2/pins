@@ -31,8 +31,6 @@ DEB := artifacts/pins-origin_$(VERSION)+origin$(ITERATION)_amd64.deb
 TAG := v$(TAG_VERSION)-origin$(ITERATION)
 REPO ?= jrrk2/pins
 NOTES ?= packaging/release-notes/origin$(ITERATION).md
-# The package is for Ubuntu 24.04 and later, and Debian 13: a .deb that needs a newer C library than 24.04's was built on too new a system.
-OLDEST_GLIBC ?= 2.39
 
 SIM_PINNED := $(CURDIR)/artifacts/src/OriginSimulator
 SIM_DIR ?= $(SIM_PINNED)
@@ -88,7 +86,7 @@ test-sim:
 # The .deb may be built on another machine and copied here with its .sha256 and .commit. Commits since the build may change only the release notes.
 publish:
 	for f in $(DEB) $(DEB).sha256 $(DEB).commit; do
-	  [[ -f "$$f" ]] || { echo "[ERROR] No $$f: make release first (on Ubuntu 24.04), or give ITERATION" >&2; exit 1; }
+	  [[ -f "$$f" ]] || { echo "[ERROR] No $$f: make release first, or give ITERATION" >&2; exit 1; }
 	done
 	(cd $(dir $(DEB)) && sha256sum --quiet -c $(notdir $(DEB)).sha256)
 	built=$$(cat $(DEB).commit)
@@ -97,9 +95,6 @@ publish:
 	git diff --quiet $$built HEAD -- . ':(exclude)packaging/release-notes' \
 	  || { echo "[ERROR] Commits since $(DEB) was built ($$built) change more than release notes: make release again" >&2; exit 1; }
 	[[ -f "$(NOTES)" ]] || { echo "[ERROR] No release notes $(NOTES): write them, or give NOTES=file" >&2; exit 1; }
-	glibc=$$(dpkg-deb -f $(DEB) Depends | sed -n 's/.*libc6 (>= \([0-9.]*\)).*/\1/p')
-	dpkg --compare-versions "$${glibc:-0}" le $(OLDEST_GLIBC) \
-	  || { echo "[ERROR] $(DEB) needs libc6 $$glibc, newer than Ubuntu 24.04's $(OLDEST_GLIBC): build it on Ubuntu 24.04" >&2; exit 1; }
 	git branch -r --contains $$built | grep -q . || { echo "[ERROR] Push $$built to GitHub first" >&2; exit 1; }
 	if git rev-parse -q --verify refs/tags/$(TAG) >/dev/null; then
 	  [[ "$$(git rev-list -n 1 $(TAG))" == "$$built" ]] || { echo "[ERROR] Tag $(TAG) exists on another commit" >&2; exit 1; }
