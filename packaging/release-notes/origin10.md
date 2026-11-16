@@ -1,6 +1,6 @@
 Tenth test build of PI.N.S. with native Celestron Origin camera, mount and focuser drivers, Touch-N-Stars and the Advanced API plugin. It replaces `origin9`.
 
-**Needs** Ubuntu 26.04 or newer on a 64-bit PC (amd64, not a Raspberry Pi). Earlier test builds installed on Ubuntu 24.04 and Debian 13; this one does not. On those, or any other Linux, build the package from source: see [Celestron Origin test package](https://github.com/jrrk2/pins/blob/origin-direct-driver/BUILD_PINS.md#celestron-origin-test-package-linux-x64-from-a-clean-clone) in `BUILD_PINS.md` (`make release`, about 5 minutes once the prerequisites are installed).
+**Needs** Ubuntu 26.04 or newer on a 64-bit PC (amd64, not a Raspberry Pi), or, new in this build, macOS 26 or newer on an Apple Silicon Mac (see below). Earlier test builds installed on Ubuntu 24.04 and Debian 13; this one does not. On those, or any other Linux, build the package from source: see [Celestron Origin test package](https://github.com/jrrk2/pins/blob/origin-direct-driver/BUILD_PINS.md#celestron-origin-test-package-linux-x64-from-a-clean-clone) in `BUILD_PINS.md` (`make release`, about 5 minutes once the prerequisites are installed).
 
 ### Install and run
 1. `sudo apt install ./pins-origin_3.3.0.1058-nightly+origin10_amd64.deb` (this also installs the libgphoto2 libraries, and astrometry.net and its Tycho-2 index files, about 140 MB, which PI.N.S. now uses to plate solve).
@@ -13,9 +13,20 @@ Tenth test build of PI.N.S. with native Celestron Origin camera, mount and focus
 - `ss -ltn | grep 5000` shows whether it is listening. Stop PI.N.S. with Ctrl-C in the terminal where `pins` runs.
 - Logs are in `~/.local/share/NINA/Logs/`; please attach the newest when reporting a problem. Messages about `indiserver` or camera SDKs (ZWO, QHY and others) are harmless for the Origin.
 
+### On a Mac (new, Apple Silicon, macOS 26 or newer)
+Tried so far only against OriginSimulator, not the real telescope: reports welcome.
+1. `brew install astrometry-net` ([Homebrew](https://brew.sh)), and the index files for the Origin's field, about 150 MB:
+   `mkdir -p ~/astrometry_indices && cd ~/astrometry_indices && for i in 08 09 10 11; do curl -fLO https://data.astrometry.net/4200/index-42$i.fits; done`
+2. Download `pins-origin_3.3.0.1058-nightly+origin10_macos-arm64.tar.gz` and unpack it anywhere: `tar -xzf pins-origin_3.3.0.1058-nightly+origin10_macos-arm64.tar.gz`. It is not notarised by Apple, so if it was downloaded with a browser, first run `xattr -dr com.apple.quarantine pins`.
+3. Close the Celestron app, run `pins/pins`, and open the address it prints. **macOS's AirPlay Receiver uses port 5000, so the web page is usually on `http://localhost:5001`**; the launcher says which. (Turning off AirPlay Receiver in System Settings, General, AirDrop & Handoff frees 5000.)
+4. Then as on Linux: set your location in Settings first, and connect the Celestron Origin Camera, Mount and Focuser.
+
+Logs are in `~/Library/Application Support/NINA/Logs/`. Messages about missing camera SDKs, `/sys/bus/usb` and `indiserver` are harmless for the Origin.
+
 ### New since origin9
 - **Unpark straight after switching the telescope on.** When switched on, the telescope starts an initialisation of its own, and until it finished Unpark failed at once (the telescope refused with error -73; seen on 13 November). Unpark now waits for that initialisation to end, whether or not it succeeds, and then aligns as usual.
 - **The model builder leaves out points behind trees and buildings.** With a custom horizon in the profile (Touch-N-Stars' Horizon File), the golden spiral drops points less than 1 degree above the horizon, and keeps the number of points asked for, spread over the open sky. On 12 November a point at 27 degrees in the north, behind trees, failed twice and cost 3.5 minutes. Without a horizon nothing changes.
+- **A macOS package**, above.
 - The package is now built from a clean clone of the repository, with everything else it includes fetched at pinned versions, and tried on OriginSimulator before release.
 
 ### New in origin9
@@ -66,6 +77,6 @@ First tried on the real telescope on the morning of 12 November: Unpark, autofoc
 - **Unpark moves the telescope.** Keep a hand near the power the first time.
 - If Unpark cannot plate solve (cloud, or no index files), it says so in the log (`~/.local/share/NINA/Logs`) and gotos go by the telescope's made-up frame until a plate solve and sync. Known: the web page may not show that, or other Unpark failures.
 
-Checked on 2026-11-16 against OriginSimulator, installed from this .deb with a fresh profile: connect, Unpark with one plate solve in 16 s, a 2 s frame, a slew to the meridian that ended 0.3 arcminutes from the target, and Park.
+Checked on 2026-11-16 against OriginSimulator, installed from this .deb with a fresh profile: connect, Unpark with one plate solve in 16 s, a 2 s frame, a slew to the meridian that ended 0.3 arcminutes from the target, and Park. The macOS package passed the same on an M-series Mac (Unpark 42 s, the slew 0.3 arcminutes from the target).
 
 SHA-256 in the `.sha256` file.
