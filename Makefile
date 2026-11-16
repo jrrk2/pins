@@ -1,6 +1,7 @@
-# Release builds of the Celestron Origin test package, and trying them on OriginSimulator. See packaging/build-portable-deb.sh for what the build
-# expects to be in place (the plugins' frontend, NINA/External) and NINA.Equipment/ARCHITECTURE.md for the simulator tests.
+# Release builds of the Celestron Origin test package, and trying them on OriginSimulator, from a clone of this repository: what comes from elsewhere
+# is pinned in packaging/deps.env and fetched by packaging/fetch-deps.sh (see BUILD_PINS.md). NINA.Equipment/ARCHITECTURE.md describes the simulator tests.
 #
+#   make deps                     fetch and build what a release needs from outside this repository; make release does this first
 #   make release                  build the next origin<N> .deb in artifacts/ (N one past the newest v*-origin* tag; ITERATION=N overrides)
 #   make release-test             unpack that .deb, run it against the simulator and drive it through the Advanced API (packaging/smoke-test-release.py)
 #   make test                     the unit tests
@@ -8,18 +9,17 @@
 #   make publish NOTES=file.md    tag the commit built and publish the .deb as a GitHub pre-release
 #   make simulator / sim-start / sim-stop
 #
-# DOTNET_DIR names a .NET SDK not on PATH. SIM_DIR is a checkout of OriginSimulator (branch mount-model).
+# DOTNET_DIR names a .NET SDK to use (default .tools/dotnet, where make deps installs one when the machine has none). SIM_DIR names a checkout of
+# OriginSimulator to use instead of the pinned one.
 
 SHELL := bash
 .SHELLFLAGS := -Eeuo pipefail -c
 .ONESHELL:
 .DELETE_ON_ERROR:
 
-DOTNET_DIR ?=
-ifneq ($(DOTNET_DIR),)
-export PATH := $(DOTNET_DIR):$(PATH)
-export DOTNET_ROOT := $(DOTNET_DIR)
-endif
+DOTNET_DIR ?= $(CURDIR)/.tools/dotnet
+# Recursive, so that an SDK that make deps installs during this run is used
+DOTNET_ENV = $(if $(wildcard $(DOTNET_DIR)/dotnet),PATH="$(DOTNET_DIR):$$PATH" DOTNET_ROOT="$(DOTNET_DIR)")
 
 RUNTIME := linux-x64
 VERSION := $(shell sed -n 's/.*AssemblyInformationalVersion("\([^"]*\)").*/\1/p' CommonAssemblyInfo.cs | head -n 1)
@@ -30,7 +30,8 @@ DEB := artifacts/pins-origin_$(VERSION)+origin$(ITERATION)_amd64.deb
 TAG := v$(TAG_VERSION)-origin$(ITERATION)
 REPO ?= jrrk2/pins
 
-SIM_DIR ?= $(HOME)/OriginSimulator
+SIM_PINNED := $(CURDIR)/artifacts/src/OriginSimulator
+SIM_DIR ?= $(SIM_PINNED)
 SIM_BIN := $(SIM_DIR)/build/OriginSimulator
 QMAKE ?= $(firstword $(shell command -v qmake6 qmake))    # Qt 6: Qt 5's qmake compiles as C++11, and the simulator needs C++17
 SIM_PORT ?= 18080
@@ -44,16 +45,19 @@ INDEX_DIR ?= $(firstword $(wildcard $(HOME)/astrometry_indices /usr/share/astrom
 TNS := NINA.Plugins/Touch-N-Stars/Touch-N-Stars
 API := NINA.Plugins/ninaAPI/ninaAPI
 
-.PHONY: release plugins release-test test test-sim publish simulator sim-start sim-stop
+.PHONY: deps release plugins release-test test test-sim publish simulator sim-build sim-start sim-stop
+
+deps:
+	packaging/fetch-deps.sh build
 
 release: plugins
-	packaging/build-portable-deb.sh $(ITERATION)
+	$(DOTNET_ENV) packaging/build-portable-deb.sh $(ITERATION)
 
-plugins:
-	dotnet build $(API)/ninaAPI.csproj -c Release -r $(RUNTIME) -v q
-	dotnet build $(TNS)/Touch-N-Stars.csproj -c Release -r $(RUNTIME) -v q
+plugins: deps
+	$(DOTNET_ENV) dotnet build $(API)/ninaAPI.csproj -c Release -r $(RUNTIME) -v q
+	$(DOTNET_ENV) dotnet build $(TNS)/Touch-N-Stars.csproj -c Release -r $(RUNTIME) -v q
 
-release-test: $(SIM_BIN)
+release-test:
 	@[[ -f "$(DEB)" ]] || { echo "[ERROR] No $(DEB): make release first, or give ITERATION" >&2; exit 1; }
 	[[ -n "$(INDEX_DIR)" ]] || { echo "[ERROR] No astrometry.net index files: give INDEX_DIR" >&2; exit 1; }
 	rm -rf $(TRY); mkdir -p $(TRY)/home
@@ -66,13 +70,13 @@ release-test: $(SIM_BIN)
 	PINS_LOGS=$(TRY)/home/.local/share/NINA/Logs packaging/smoke-test-release.py
 
 test:
-	dotnet test NINA.Test/NINA.Test.csproj
+	$(DOTNET_ENV) dotnet test NINA.Test/NINA.Test.csproj
 
 # The simulator tests are [Explicit], so they run only when the filter names them.
-test-sim: $(SIM_BIN)
+test-sim:
 	@$(MAKE) --no-print-directory sim-start
 	trap '$(MAKE) --no-print-directory sim-stop' EXIT
-	ORIGIN_SIM=127.0.0.1:$(SIM_PORT) dotnet test NINA.Test/NINA.Test.csproj --filter "$(subst |,|FullyQualifiedName~,FullyQualifiedName~$(SIM_TESTS))" \
+	ORIGIN_SIM=127.0.0.1:$(SIM_PORT) $(DOTNET_ENV) dotnet test NINA.Test/NINA.Test.csproj --filter "$(subst |,|FullyQualifiedName~,FullyQualifiedName~$(SIM_TESTS))" \
 	  --logger "console;verbosity=detailed"
 
 publish:
@@ -84,7 +88,12 @@ publish:
 	gh release create $(TAG) -R $(REPO) --prerelease --title "PI.N.S. for Celestron Origin, test build origin$(ITERATION)" \
 	  --notes-file $(NOTES) $(DEB) $(DEB).sha256
 
-simulator: $(SIM_BIN)
+# The pinned simulator is fetched, or moved to the pin, first; the build then sees its sources as they are.
+simulator:
+	@if [[ "$(SIM_DIR)" == "$(SIM_PINNED)" ]]; then packaging/fetch-deps.sh sim; fi
+	$(MAKE) --no-print-directory sim-build
+
+sim-build: $(SIM_BIN)
 
 $(SIM_BIN): $(wildcard $(SIM_DIR)/*.cpp $(SIM_DIR)/*.h $(SIM_DIR)/*.pro)
 	[[ -f "$(SIM_DIR)/OriginSimulator.pro" ]] || { echo "[ERROR] No OriginSimulator in $(SIM_DIR): give SIM_DIR" >&2; exit 1; }
@@ -94,7 +103,7 @@ $(SIM_BIN): $(wildcard $(SIM_DIR)/*.cpp $(SIM_DIR)/*.h $(SIM_DIR)/*.pro)
 	$(MAKE) -j$$(nproc)
 
 # Port 80 is refused by the tests, being where a real telescope listens; no discovery broadcast, in case one is on the network.
-sim-start: $(SIM_BIN)
+sim-start: simulator
 	@mkdir -p $(SIM_RUN)
 	if [[ -f $(SIM_RUN)/pid ]] && kill -0 $$(cat $(SIM_RUN)/pid) 2>/dev/null; then echo "[INFO] The simulator is already running"; exit 0; fi
 	(cd $(SIM_DIR) && ORIGIN_SIM_PORT=$(SIM_PORT) ORIGIN_SIM_BROADCAST=0 QT_QPA_PLATFORM=offscreen exec $(SIM_BIN)) > $(SIM_RUN)/sim.log 2>&1 &

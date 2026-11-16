@@ -9,6 +9,36 @@ This document describes how to build the PINS Debian package (Raspberry Pi `linu
 
 ---
 
+## Celestron Origin test package (linux-x64), from a clean clone
+
+The `pins-origin` .deb (installs to `/opt/pins`, published as the `v*-originN` pre-releases) builds from a clone of this repository on any x86-64
+Ubuntu 24.04 or later, or a derivative such as KDE neon. Everything else is fetched at the versions pinned in `packaging/deps.env`:
+
+```bash
+git clone -b origin-direct-driver https://github.com/jrrk2/pins.git && cd pins
+sudo apt-get install build-essential cmake git curl rsync patchelf dpkg-dev xz-utils python3 \
+  libopencv-dev libopencv-contrib-dev libraw-dev libcfitsio-dev libhidapi-dev
+make release          # artifacts/pins-origin_<version>+origin<N>_amd64.deb
+```
+
+`make release` first runs `packaging/fetch-deps.sh`, which only does what is missing:
+
+- the .NET SDK (into `.tools/dotnet`) unless one of the band in `global.json` is installed, and Node (into `.tools/node`) unless one at least as new as the pin is;
+- the ninaAPI and Touch-N-Stars plugins into `NINA.Plugins/`, and the Touch-N-Stars frontend built into the plugin's `app/`. A checkout already there is left as it is, with a warning when it is not at the pin, so plugin work in progress is built as it stands;
+- `NINA/External`: NOVAS and SOFA built from this repository (NOVAS's `CIO_RA.TXT` comes from Git LFS over HTTPS, so `git-lfs` is not needed), JPLEPH, and an OpenCvSharpExtern built against the distribution's OpenCV by `build_opencvsharp_extern` in `build-and-install-pins-x64.sh`.
+
+To try the package on OriginSimulator before publishing it (see `NINA.Equipment/ARCHITECTURE.md`):
+
+```bash
+sudo apt-get install qt6-base-dev libnova-dev libtiff-dev astrometry.net astrometry-data-2mass-08-19
+make release-test
+make publish NOTES=notes.md     # tags the commit and uploads the GitHub pre-release
+```
+
+Moving a pin is a commit to `packaging/deps.env`. Delete what it governs (the plugin checkout, `NINA.Plugins/Touch-N-Stars/Touch-N-Stars/app`, or `NINA/External`) for the next `make deps` to fetch it again.
+
+---
+
 ## Prerequisites
 
 ### OS

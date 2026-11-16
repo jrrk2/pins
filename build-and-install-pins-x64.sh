@@ -2243,4 +2243,7 @@ main() {
   print_summary
 }
 
-main "$@"
+# Sourced (by packaging/fetch-deps.sh, for build_opencvsharp_extern), it only defines its functions.
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
