@@ -122,7 +122,7 @@ if [[ "$LIBRARIES" == system ]]; then
       seen["$(package_of "$path")"]=1
     done < <(env -u LD_LIBRARY_PATH ldd "$source" | grep -F "$(readelf -d "$source" | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/\1/p')")
   done
-  unset 'seen[libc6]'    # in Depends already, with its version
+  unset 'seen[libc6]' 'seen[libudev1]'    # in Depends already
   mapfile -t system_depends < <(printf '%s\n' "${!seen[@]}" | sort)
 else
   for source in "${sources[@]}"; do
