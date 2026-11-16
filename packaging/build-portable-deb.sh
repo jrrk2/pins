@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Builds a self-contained linux-x64 .deb of PINS with Touch-N-Stars, for trying on another computer.
+# Builds a self-contained .deb of PINS (amd64 or arm64, as the machine it runs on) with Touch-N-Stars, for trying on another computer.
 #
 # Unlike build-and-install-pins-x64.sh, which targets the machine it runs on, this installs to /opt/pins for any user and carries
 # the OpenCV stack it was built against in /opt/pins/lib, so the target needs no particular OpenCV. It needs a glibc at least as
 # new as the build machine's, and pulls in the handful of libraries in Depends.
 #
 # Expects:
-#   NINA.Plugins/Touch-N-Stars and NINA.Plugins/ninaAPI built for Release/net10.0/linux-x64 (see BUILD_PINS.md),
+#   NINA.Plugins/Touch-N-Stars and NINA.Plugins/ninaAPI built for Release/net10.0/linux-<arch> (see BUILD_PINS.md),
 #   with the frontend in NINA.Plugins/Touch-N-Stars/Touch-N-Stars/app
-#   NINA/External/linux-x64 holding NOVAS, SOFA and an OpenCvSharpExtern built locally (see build_opencvsharp_extern in
+#   NINA/External/linux-<arch> holding NOVAS, SOFA and an OpenCvSharpExtern built locally (see build_opencvsharp_extern in
 #   build-and-install-pins-x64.sh)
 #
 # Usage: packaging/build-portable-deb.sh [iteration]    The result goes in artifacts/.
@@ -17,7 +17,13 @@ set -Eeuo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 ITERATION="${1:-1}"
-RUNTIME=linux-x64
+case "$(uname -m)" in
+  x86_64) RUNTIME=linux-x64 ;;
+  aarch64|arm64) RUNTIME=linux-arm64 ;;
+  *) echo "[ERROR] No .NET runtime for $(uname -m)" >&2; exit 1 ;;
+esac
+ARCH="$(dpkg --print-architecture)"
+MULTIARCH="$(gcc -print-multiarch)"    # where the distribution keeps this architecture's libraries, as x86_64-linux-gnu
 WORK=artifacts/portable-deb
 PUBLISH="$WORK/publish"
 ROOT="$WORK/root"
@@ -97,8 +103,8 @@ done
 # from the runtime packages in Depends, and these links stand in for the unversioned names that only libgphoto2-dev provides.
 # Made after the rpath loop, which would otherwise follow them into the build machine's /usr/lib.
 for name in libgphoto2.so.6 libgphoto2_port.so.12; do
-  ln -sf "/usr/lib/x86_64-linux-gnu/$name" "$OPT/External/$RUNTIME/${name%.so.*}.so"
-  ln -sf "/usr/lib/x86_64-linux-gnu/$name" "$OPT/lib/${name%.so.*}.so"
+  ln -sf "/usr/lib/$MULTIARCH/$name" "$OPT/External/$RUNTIME/${name%.so.*}.so"
+  ln -sf "/usr/lib/$MULTIARCH/$name" "$OPT/lib/${name%.so.*}.so"
 done
 
 echo "[INFO] Adding plugins"
@@ -144,7 +150,7 @@ Package: pins-origin
 Version: $package_version
 Section: misc
 Priority: optional
-Architecture: amd64
+Architecture: $ARCH
 Maintainer: PINS Team
 Installed-Size: $installed_size
 Depends: libc6 (>= $(ldd --version | sed -n '1s/.* \([0-9]*\.[0-9]*\).*/\1/p')), libssl3t64 | libssl3, libudev1, libusb-1.0-0, libgphoto2-6t64 | libgphoto2-6, libgphoto2-port12t64 | libgphoto2-port12
@@ -154,7 +160,7 @@ Description: PI.N.S. with Touch-N-Stars and Celestron Origin drivers
  Self-contained test build. Run "pins" and open http://localhost:5000.
 CONTROL
 
-deb="artifacts/pins-origin_${package_version}_amd64.deb"
+deb="artifacts/pins-origin_${package_version}_$ARCH.deb"
 dpkg-deb --root-owner-group -Zxz --build "$ROOT" "$deb"
 (cd "$(dirname "$deb")" && sha256sum "$(basename "$deb")" > "$(basename "$deb").sha256")    # no artifacts/ prefix, so sha256sum -c works next to a download
 du -sh "$OPT" "$deb"

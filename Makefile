@@ -3,7 +3,7 @@
 #
 #   make deps                     fetch and build what a release needs from outside this repository; make release does this first
 #   make release                  build the next origin<N> package in artifacts/ (N one past the newest v*-origin* tag; ITERATION=N overrides):
-#                                 a .deb on Linux, a .tar.gz on a Mac
+#                                 a .deb on Linux (amd64 or arm64), a .tar.gz on a Mac
 #   make release-test             unpack that package, run it against the simulator and drive it through the Advanced API (packaging/smoke-test-release.py)
 #   make test                     the unit tests
 #   make test-sim                 the tests that drive the simulator, which take tens of minutes at the real speeds (SIM_TESTS picks them)
@@ -31,14 +31,14 @@ DOTNET_ENV = $(if $(wildcard $(DOTNET_DIR)/dotnet),PATH="$(DOTNET_DIR):$$PATH" D
 ifeq ($(shell uname -s),Darwin)
 RUNTIME := osx-$(if $(filter arm64,$(shell uname -m)),arm64,x64)
 else
-RUNTIME := linux-x64
+RUNTIME := linux-$(if $(filter aarch64 arm64,$(shell uname -m)),arm64,x64)
 endif
 VERSION := $(shell sed -n 's/.*AssemblyInformationalVersion("\([^"]*\)").*/\1/p' CommonAssemblyInfo.cs | head -n 1)
 TAG_VERSION := $(firstword $(subst -, ,$(VERSION)))
 LAST_ITERATION := $(shell git tag -l 'v*-origin*' | sed -n 's/.*-origin\([0-9][0-9]*\)$$/\1/p' | sort -n | tail -n 1)
 ITERATION ?= $(shell echo $$(( $(or $(LAST_ITERATION),0) + 1 )))
-ifeq ($(RUNTIME),linux-x64)
-PACKAGE := artifacts/pins-origin_$(VERSION)+origin$(ITERATION)_amd64.deb
+ifneq ($(filter linux-%,$(RUNTIME)),)
+PACKAGE := artifacts/pins-origin_$(VERSION)+origin$(ITERATION)_$(shell dpkg --print-architecture).deb
 PACKAGER := packaging/build-portable-deb.sh
 SHA256SUM := sha256sum
 # The package's own launcher, and where its logs go, once unpacked into $(TRY)

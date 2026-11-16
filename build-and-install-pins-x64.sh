@@ -800,7 +800,7 @@ find_opencv_cmake_dir() {
 build_opencvsharp_extern() {
   log "Building OpenCvSharpExtern against the local OpenCV"
 
-  [[ "$TARGET_RUNTIME" == "linux-x64" ]] || {
+  [[ "$TARGET_RUNTIME" == linux-* ]] || {
     warn "Skipping OpenCvSharpExtern build for TARGET_RUNTIME=$TARGET_RUNTIME"
     return
   }

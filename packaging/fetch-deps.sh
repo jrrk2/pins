@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fetches and builds what the Origin test package needs from outside this repository, at the versions pinned in packaging/deps.env, so that a
-# clone of this repository builds on any x86-64 Ubuntu 24.04 or later (or a derivative) that has the apt packages below, or on a Mac with the
+# clone of this repository builds on any x86-64 or arm64 Ubuntu 24.04 or Debian 13 or later (or a derivative) that has the apt packages below, or on a Mac with the
 # Homebrew packages below. Run again, it does only what is missing. "make release" runs it with "build", "make simulator" with "sim".
 #
 #   build   the .NET SDK and Node (under .tools/ when the machine has no suitable one), the ninaAPI and Touch-N-Stars plugins, the Touch-N-Stars
@@ -20,6 +20,7 @@ source packaging/deps.env
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) RUNTIME=osx-arm64 ;;
   Darwin-x86_64) RUNTIME=osx-x64 ;;
+  *-aarch64|*-arm64) RUNTIME=linux-arm64 ;;
   *) RUNTIME=linux-x64 ;;
 esac
 if [[ "$RUNTIME" == osx-* ]]; then
@@ -155,7 +156,7 @@ ensure_node() {
   have="$(node --version 2>/dev/null | sed 's/^v\([0-9]*\).*/\1/' || true)"
   [[ -n "$have" && "$have" -ge "$major" ]] && return
   log "Installing Node $NODE_VERSION into .tools/node"
-  local platform=linux-x64 tmp name
+  local platform="$RUNTIME" tmp name
   [[ "$RUNTIME" == osx-* ]] && platform="darwin-${RUNTIME#osx-}"
   name="node-v$NODE_VERSION-$platform.tar.xz"
   tmp="$(mktemp -d)"
