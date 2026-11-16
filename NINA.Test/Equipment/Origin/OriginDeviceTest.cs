@@ -1176,6 +1176,46 @@ namespace NINA.Test.Equipment.Origin {
         }
 
         [Test]
+        public async Task Mount_FakeUnparkInitialisesAgainWhenTheTelescopesSiteIsNotTheProfiles() {
+            // 2026-11-16: an aligned telescope still holding a site ~150 km off, from an earlier session, through a reboot
+            telescope.MountStatus = new JObject { ["IsAligned"] = true, ["IsGotoOver"] = true, ["Latitude"] = 51.1485 * Math.PI / 180, ["Longitude"] = -1.2669 * Math.PI / 180 };
+            var mount = NewTelescope();
+            mount.FakeInitialize = true;
+            await mount.Connect(default);
+            await PushTaskState("IDLE");
+            await WaitFor(() => telescope.Received.Any(m => m.Value<string>("Command") == "GetStatus"));
+            telescope.Handlers["RunInitialize"] = command => {
+                _ = PushTaskState("IDLE", sequence: 1, extra: new JObject { ["IsFakeInitialized"] = true });
+                return new JObject { ["ErrorCode"] = 0 };
+            };
+
+            await mount.Unpark(default);
+
+            var sent = telescope.Received.Single(m => m.Value<string>("Command") == "RunInitialize");
+            sent.Value<bool>("FakeInitialize").Should().BeTrue();
+            sent.Value<double>("Latitude").Should().BeApproximately(52.2 * Math.PI / 180, 1e-12);
+            sent.Value<double>("Longitude").Should().BeApproximately(0.12 * Math.PI / 180, 1e-12);
+            mount.AtPark.Should().BeFalse();
+            mount.Disconnect();
+        }
+
+        [Test]
+        public async Task Mount_FakeUnparkLeavesATelescopeAtTheProfilesSiteAlone() {
+            telescope.MountStatus = new JObject { ["IsAligned"] = true, ["IsGotoOver"] = true, ["Latitude"] = 52.2 * Math.PI / 180, ["Longitude"] = 0.12 * Math.PI / 180 };
+            var mount = NewTelescope();
+            mount.FakeInitialize = true;
+            await mount.Connect(default);
+            await PushTaskState("IDLE");
+            await WaitFor(() => telescope.Received.Any(m => m.Value<string>("Command") == "GetStatus"));
+
+            await mount.Unpark(default);
+
+            telescope.Count("RunInitialize").Should().Be(0);
+            mount.AtPark.Should().BeFalse();
+            mount.Disconnect();
+        }
+
+        [Test]
         public async Task Mount_StaysParkedAndUnparkFailsWhenThePlateSolveDoesNot() {
             var mount = NewTelescope();
             mount.FakeInitialize = true;

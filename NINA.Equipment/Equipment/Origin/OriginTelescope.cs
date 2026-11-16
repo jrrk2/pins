@@ -278,6 +278,7 @@ namespace NINA.Equipment.Equipment.Origin {
 
         // Radians on the telescope (the simulator sends degrees, which this rejects in favour of the profile's site), and only meaningful once aligned.
         private bool SiteIsPlausible => aligned && Math.Abs(mount.Latitude) <= Math.PI / 2 && Math.Abs(mount.Longitude) <= Math.PI;
+        private const double SiteTolerance = 0.01;     // degrees, about a kilometre
 
         public Coordinates Coordinates => new Coordinates(Angle.ByRadians(raRadians), Angle.ByRadians(decRadians), Epoch.J2000);
         public double RightAscension => AstroUtil.EuclidianModulus(AstroUtil.DegreesToHours(AstroUtil.ToDegree(raRadians)), 24);
@@ -642,6 +643,17 @@ namespace NINA.Equipment.Equipment.Origin {
             var backend = Backend ?? throw new OriginException($"{Name} is not connected");
             RefuseInDaylight("unparking");
             var site = profileService.ActiveProfile.AstrometrySettings;
+            // The telescope keeps its site through reboots (2026-11-16: one ~150 km off, from an earlier session), and an aligned one is not
+            // initialised again, so its site would stand: initialising again gives it the profile's. Only where PI.N.S. points (a fake
+            // initialisation; after the telescope's own, its frame and site are its own) and has no model yet, which points by the profile's
+            // site whatever the telescope says: the telescope keeps reporting its old site after a fake initialisation, so this would
+            // otherwise throw away every model, a loaded one too, at each Unpark.
+            if (aligned && FakeInitialize && !firmwareAligned && calibration?.Model == null && SiteIsPlausible && (Math.Abs(SiteLatitude - site.Latitude) > SiteTolerance || Math.Abs(SiteLongitude - site.Longitude) > SiteTolerance)) {
+                Logger.Info($"{Name}: the telescope's site {SiteLatitude:0.0000}, {SiteLongitude:0.0000} is not the profile's {site.Latitude:0.0000}, {site.Longitude:0.0000}: initialising again with the profile's");
+                await Initialize(FakeInitialize, token);
+                ThrowIfStillAwaitingPlateSolve();
+                return;
+            }
             if (aligned) {
                 parkedAtPolaris = false;
                 unparkedByPins = true;
