@@ -218,9 +218,12 @@ fetch_build() {
 fetch_sim() {
   check_packages "${SIM_PACKAGES[@]}"
   clone_pinned "$SIM_URL" "$SIM_COMMIT" "$SRC/OriginSimulator" owned
-  local dir
+  # As astrometry.net publishes them (index-4208-00.fits), or as Debian's astrometry-data-2mass packages name them (index-2mass-08.fits)
+  local dir pattern
   for dir in "$HOME/astrometry_indices" /usr/share/astrometry /usr/local/share/astrometry; do
-    compgen -G "$dir/index-42[01][0-9]*.fits" > /dev/null && return
+    for pattern in index-420[89] index-421[01] index-2mass-0[89] index-2mass-1[01]; do
+      compgen -G "$dir/$pattern*.fits" > /dev/null && return
+    done
   done
   fail "No astrometry.net index files for the Origin's field (4208-4211), without which Unpark cannot plate solve. Install them with:"$'\n' \
        " sudo apt-get install astrometry-data-2mass-08-19"$'\n'"or put the files in ~/astrometry_indices"
