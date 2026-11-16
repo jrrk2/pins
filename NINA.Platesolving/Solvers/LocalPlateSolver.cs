@@ -42,7 +42,7 @@ namespace NINA.PlateSolving.Solvers {
             if (OperatingSystem.IsWindows()) {
                 return null;
             }
-            foreach (var dir in new[] { "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin" }) {
+            foreach (var dir in new[] { "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin", "/opt/local/bin" }) {
                 var path = Path.Combine(dir, tool);
                 if (File.Exists(path)) {
                     return path;

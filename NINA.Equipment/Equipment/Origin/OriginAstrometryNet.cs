@@ -33,13 +33,15 @@ namespace NINA.Equipment.Equipment.Origin {
         private readonly string[] indexDirectories;
         private readonly TimeSpan timeout;
 
-        /// <param name="indexDirectory">Where the index files are; otherwise ORIGIN_INDEX_DIR, or whichever of ~/astrometry_indices, /usr/share/astrometry and
-        /// /usr/local/share/astrometry exist (Ubuntu installs its index packages, such as astrometry-data-tycho2-07-littleendian, in /usr/share/astrometry).</param>
+        /// <param name="indexDirectory">Where the index files are; otherwise ORIGIN_INDEX_DIR, or whichever of ~/astrometry_indices, /usr/share/astrometry,
+        /// /usr/local/share/astrometry, and on a Mac Homebrew's and MacPorts' share/astrometry, exist (Ubuntu installs its index packages, such as
+        /// astrometry-data-tycho2-07-littleendian, in /usr/share/astrometry).</param>
         public OriginAstrometryNet(string indexDirectory = null, TimeSpan? timeout = null) {
             var configured = indexDirectory ?? Environment.GetEnvironmentVariable("ORIGIN_INDEX_DIR");
             indexDirectories = configured != null
                 ? new[] { configured }
-                : new[] { Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "astrometry_indices"), "/usr/share/astrometry", "/usr/local/share/astrometry" }
+                : new[] { Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "astrometry_indices"), "/usr/share/astrometry", "/usr/local/share/astrometry",
+                          "/opt/homebrew/share/astrometry", "/opt/local/share/astrometry" }
                     .Where(Directory.Exists).ToArray();
             this.timeout = timeout ?? TimeSpan.FromSeconds(90);
         }
