@@ -5,6 +5,7 @@
 #   - the astrometry.net index files for the Origin's field (4208-4211) in /usr/share/astrometry
 #   - the Ethernet port in NetworkManager's shared mode, which serves the Origin DHCP
 #   - a polkit rule letting the user scan for Wi-Fi over SSH
+#   - the LiveStack plugin, built here from the source pinned in packaging/deps.env, which the first boot gives the user
 # Imager's own settings (hostname, user, Wi-Fi, SSH key, locale) apply as to Raspberry Pi OS itself.
 #
 # Needs no root: the root filesystem is edited in place with debugfs, so it keeps everything else as Raspberry Pi built it (owners, modes,
@@ -112,6 +113,26 @@ not_local="$(grep '^Inst ' "$WORK/offline-install.log" | grep -vE 'local-deb \[(
 [[ -z "$not_local" ]] || { echo "$not_local" >&2; fail "apt would not take these packages from the image"; }
 (( $(grep -c '^Inst ' "$WORK/offline-install.log") == ${#debs[@]} + 1 )) || fail "apt would not install every package the image carries"
 
+# LiveStack: plain .NET, so built here for the Pi. Its build copies the plugin into $HOME's NINA plugins, so it gets a home of its own
+echo "[INFO] Building LiveStack"
+livestack_src=artifacts/livestack-src
+[[ -d "$livestack_src/.git" ]] || git clone -q "$LIVESTACK_URL" "$livestack_src"
+git -C "$livestack_src" cat-file -e "$LIVESTACK_COMMIT^{commit}" 2>/dev/null || git -C "$livestack_src" fetch -q origin
+git -C "$livestack_src" -c advice.detachedHead=false checkout -q --force "$LIVESTACK_COMMIT"
+dotnet_dir="$(realpath .tools/dotnet 2>/dev/null || dirname "$(readlink -f "$(command -v dotnet)")")"
+[[ -x "$dotnet_dir/dotnet" ]] || fail "No .NET SDK: run packaging/fetch-deps.sh"
+livestack_home="$(realpath "$WORK")/livestack-home"
+rm -rf "$livestack_home"
+mkdir -p "$livestack_home"
+HOME="$livestack_home" DOTNET_CLI_HOME="$livestack_home" NUGET_PACKAGES="${NUGET_PACKAGES:-$HOME/.nuget/packages}" DOTNET_ROOT="$dotnet_dir" \
+  "$dotnet_dir/dotnet" build "$livestack_src/nina.plugin.livestack.csproj" -c Release -r linux-arm64 -v q -nologo > "$WORK/livestack-build.log" 2>&1 ||
+  { tail -20 "$WORK/livestack-build.log" >&2; fail "LiveStack did not build"; }
+livestack="$livestack_src/bin/Release/net10.0/linux-arm64"
+for file in nina.plugin.livestack.dll MathNet.Numerics.dll; do
+  [[ -s "$livestack/$file" ]] || fail "LiveStack's build has no $file"
+done
+rm -rf "$livestack_home"
+
 echo "[INFO] Adding PI.N.S."
 commands="$WORK/debugfs.txt"
 : > "$commands"
@@ -129,6 +150,10 @@ dir /opt/pins-image/debs
 for package in "${debs[@]}"; do
   add "$package" "/opt/pins-image/debs/$(basename "$package")" 644
 done
+dir /opt/pins-image/Livestack
+add "$livestack/nina.plugin.livestack.dll" /opt/pins-image/Livestack/nina.plugin.livestack.dll 644
+add "$livestack/MathNet.Numerics.dll" /opt/pins-image/Livestack/MathNet.Numerics.dll 644
+add "$livestack_src/LICENSE.txt" /opt/pins-image/Livestack/LICENSE.txt 644
 add packaging/pi-image/pins-firstboot.sh /opt/pins-image/pins-firstboot.sh 755
 add packaging/pi-image/pins-firstboot.service /etc/systemd/system/pins-firstboot.service 644
 add packaging/pi-image/pins@.service /etc/systemd/system/pins@.service 644

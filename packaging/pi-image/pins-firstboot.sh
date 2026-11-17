@@ -34,6 +34,13 @@ if [ ! -e /var/lib/pins-image-packages ]; then
     rm -rf /opt/pins-image/debs     # about 160 MB: room on small cards
     touch /var/lib/pins-image-packages
 fi
+# LiveStack, which PI.N.S. loads from the user's plugins as it would a plugin installed from its list
+plugins="$(getent passwd "$user" | cut -d: -f6)/.local/share/NINA/Plugins/3.0.0"
+if [ ! -e "$plugins/Livestack/nina.plugin.livestack.dll" ]; then
+    runuser -u "$user" -- mkdir -p "$plugins/Livestack"
+    runuser -u "$user" -- cp /opt/pins-image/Livestack/nina.plugin.livestack.dll /opt/pins-image/Livestack/MathNet.Numerics.dll \
+        /opt/pins-image/Livestack/LICENSE.txt "$plugins/Livestack/"
+fi
 systemctl enable --now "pins@$user.service"
 
 # The profile, through the Advanced API as the web page sets it, once PI.N.S. answers: the Origin's devices, plate solving binned 2x2 as
