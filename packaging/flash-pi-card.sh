@@ -113,4 +113,4 @@ sync
 udisksctl unmount -b "$boot" > /dev/null
 udisksctl power-off -b "$DEVICE" 2>/dev/null || true
 echo "[INFO] Done: $HOST with user $USER_NAME (${#keys[@]} SSH keys) on $WIFI_SSID. Take the card out and boot the Pi with it."
-echo "[INFO] The first boot installs PI.N.S. from the internet (journalctl -u pins-firstboot), then it is at http://$HOST.local:5000"
+echo "[INFO] The first boot installs PI.N.S. from the card, a few minutes (journalctl -u pins-firstboot), then it is at http://$HOST.local:5000"

@@ -24,7 +24,7 @@ done)"
 # From the files alone: no apt-get update, so neither the internet nor the clock (the Pi has no clock battery) matters
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$deb" /opt/pins-image/debs/*.deb
 [ -z "$new" ] || echo "$new" | xargs apt-mark auto > /dev/null
-rm -rf /opt/pins-image/debs     # about 850 MB: room on small cards
+rm -rf /opt/pins-image/debs     # about 160 MB: room on small cards
 systemctl enable --now "pins@$user.service"
 touch /var/lib/pins-image-installed
 echo "PI.N.S. installed and started as $user: http://$(hostname).local:5000"
