@@ -102,11 +102,15 @@ APT_CONFIG="$apt_dir/apt.conf" apt-get -qq install --download-only -y "$(realpat
 debs=("$apt_dir"/archives/*.deb)
 [[ -f "${debs[0]}" ]] || fail "apt downloaded no packages"
 echo "[INFO] ${#debs[@]} packages, $(du -ch "${debs[@]}" | tail -1 | cut -f1)"
-# The first boot installs from these files alone: apt, with no package lists at all, finds them enough
-rm -rf "$apt_dir/lists"
-mkdir -p "$apt_dir/lists/partial"
-APT_CONFIG="$apt_dir/apt.conf" apt-get -qq install -s "$(realpath "$DEB")" "${debs[@]}" > "$WORK/offline-install.log" 2>&1 ||
+# The first boot installs from these files alone, with the sources turned off as here: apt, with the archives' lists at hand, takes every
+# package from them (with the sources on, it took most from the archives instead)
+mkdir -p "$apt_dir/no-sources"
+APT_CONFIG="$apt_dir/apt.conf" apt-get -qq install -s -o Dir::Etc::sourcelist=/dev/null -o Dir::Etc::sourceparts="$apt_dir/no-sources" \
+    "$(realpath "$DEB")" "${debs[@]}" > "$WORK/offline-install.log" 2>&1 ||
   { cat "$WORK/offline-install.log" >&2; fail "The packages downloaded are not enough to install $(basename "$DEB") without the internet"; }
+not_local="$(grep '^Inst ' "$WORK/offline-install.log" | grep -vE 'local-deb \[(arm64|all)\]\)' || true)"
+[[ -z "$not_local" ]] || { echo "$not_local" >&2; fail "apt would not take these packages from the image"; }
+(( $(grep -c '^Inst ' "$WORK/offline-install.log") == ${#debs[@]} + 1 )) || fail "apt would not install every package the image carries"
 
 echo "[INFO] Adding PI.N.S."
 commands="$WORK/debugfs.txt"

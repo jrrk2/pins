@@ -21,8 +21,12 @@ new="$(for package in /opt/pins-image/debs/*.deb; do
     name="$(dpkg-deb -f "$package" Package)"
     [ "$(dpkg-query -W -f '${db:Status-Status}' "$name" 2>/dev/null)" = installed ] || [ "$name" = astrometry.net ] || echo "$name"
 done)"
-# From the files alone: no apt-get update, so neither the internet nor the clock (the Pi has no clock battery) matters
-DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$deb" /opt/pins-image/debs/*.deb
+# From the files alone, as the image's build checked: with no sources, apt cannot take the same versions from the archives instead, as it
+# did with the internet up (2026-11-17), so neither the internet nor the clock (the Pi has no clock battery) matters
+no_sources="$(mktemp -d)"
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    -o Dir::Etc::sourcelist=/dev/null -o Dir::Etc::sourceparts="$no_sources" "$deb" /opt/pins-image/debs/*.deb
+rmdir "$no_sources"
 [ -z "$new" ] || echo "$new" | xargs apt-mark auto > /dev/null
 rm -rf /opt/pins-image/debs     # about 160 MB: room on small cards
 systemctl enable --now "pins@$user.service"
