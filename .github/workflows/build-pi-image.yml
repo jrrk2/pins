@@ -1,0 +1,105 @@
+name: Build Raspberry Pi image
+
+# The arm64 pins-origin package (make release) and the Raspberry Pi image carrying it (make pi-image), on GitHub's arm64 runner in Debian 13,
+# the release Raspberry Pi OS is built on, so the package depends on the same libraries the image has. The package, the image (.img.xz, for
+# Raspberry Pi Imager) and the image with its installer in front (.run) are kept as the run's artifact, and added to the origin<N> release
+# when one is asked for and has been published (make publish).
+
+on:
+  workflow_dispatch:
+    inputs:
+      iteration:
+        description: origin<N> to build (default one past the newest v*-origin* tag)
+        required: false
+        default: ''
+      add_to_release:
+        description: Add the package and image to the v*-origin<N> release, if published
+        type: boolean
+        default: false
+
+concurrency:
+  group: build-pi-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    container:
+      image: debian:trixie
+    permissions:
+      contents: write
+    timeout-minutes: 180
+
+    steps:
+      # BUILD_PACKAGES in packaging/fetch-deps.sh, what build-portable-deb.sh and build-pi-image.sh use, and git and gh for this workflow
+      - name: Install build packages
+        run: |
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git curl make build-essential cmake rsync patchelf dpkg-dev xz-utils \
+            python3 libopencv-dev libopencv-contrib-dev libraw-dev libcfitsio-dev libhidapi-dev binutils file fakeroot e2fsprogs fdisk gh
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+          submodules: false
+
+      # make release numbers the package from these tags
+      - name: Fetch the origin tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git fetch -q --depth=1 origin '+refs/tags/v*-origin*:refs/tags/v*-origin*'
+
+      - name: Cache the SDKs and the Raspberry Pi OS download
+        uses: actions/cache@v4
+        with:
+          path: |
+            .tools
+            artifacts/pi-image/*.img.xz
+            artifacts/pi-image/indices
+          key: pi-image-${{ runner.arch }}-${{ hashFiles('packaging/deps.env', 'global.json') }}
+
+      - name: Build the arm64 package
+        shell: bash
+        run: |
+          set -euo pipefail
+          make release ${{ inputs.iteration && format('ITERATION={0}', inputs.iteration) || '' }}
+          deb="$(ls -t artifacts/pins-origin_*_arm64.deb | head -1)"
+          echo "DEB=$deb" >> "$GITHUB_ENV"
+          echo "TAG=v$(dpkg-deb -f "$deb" Version | sed 's/-[^+]*//; s/+/-/')" >> "$GITHUB_ENV"
+
+      - name: Build the image
+        shell: bash
+        run: make pi-image DEB="$DEB"
+
+      - name: List what was built
+        shell: bash
+        run: ls -la "$DEB"* artifacts/*_rpi-arm64.*
+
+      - name: Keep them as the run's artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pins-origin-rpi-arm64
+          compression-level: 0
+          path: |
+            ${{ env.DEB }}
+            ${{ env.DEB }}.sha256
+            ${{ env.DEB }}.commit
+            artifacts/*_rpi-arm64.img.xz
+            artifacts/*_rpi-arm64.img.xz.sha256
+            artifacts/*_rpi-arm64.run
+            artifacts/*_rpi-arm64.run.sha256
+
+      - name: Add them to the release
+        if: inputs.add_to_release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" > /dev/null || { echo "[ERROR] $TAG is not published: make publish first" >&2; exit 1; }
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber "$DEB" "$DEB.sha256" artifacts/*_rpi-arm64.img.xz* artifacts/*_rpi-arm64.run*

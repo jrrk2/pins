@@ -53,6 +53,10 @@ the libraries in `/opt/pins/lib` with patchelf: on Debian 13 arm64 a rewritten `
 
 Debian has the Origin's index files as `astrometry-data-2mass-08-19`, or put 4208-4211 in `~/astrometry_indices` as for a Mac below.
 
+`make pi-image DEB=<the arm64 .deb>` then builds the card image for it (`packaging/build-pi-image.sh`). Without a Pi, the "Build Raspberry Pi
+image" workflow (`.github/workflows/build-pi-image.yml`, run by hand from the Actions tab) does both on GitHub's arm64 runner in a Debian 13
+container, keeps the package, `.img.xz` and `.run` as the run's artifact, and can add them to the `origin<N>` release once `make publish` has made it.
+
 ### On a Mac
 
 The same targets build `pins-origin_<version>+origin<N>_macos-arm64.tar.gz` on a Mac (Apple Silicon; an Intel Mac would make `macos-x64`), with
