@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Writes the PI.N.S. Raspberry Pi image (make pi-image) to an SD card, with what Raspberry Pi Imager's settings would add: a hostname, a user
 # (sudo with its password, the SSH keys in ~/.ssh/id_*.pub and PI_SSH_KEYS), the Wi-Fi, and SSH on. Raspberry Pi OS's cloud-init reads them
-# from the card's boot partition at the first boot.
+# from the card's boot partition at the first boot. The site (latitude and longitude, decimal degrees, east positive) goes there too, in
+# pins.conf, which the image's first boot puts in PI.N.S.'s profile.
 #
 # Usage: packaging/flash-pi-card.sh <device, as /dev/sdb> [hostname] [image]
 #   hostname  default origin6; image  default the newest artifacts/*_rpi-arm64.img.xz
-#   WIFI_SSID default "YourNetwork"; asks for the Wi-Fi password and the user's password
-#   CONFIG_ONLY=<dir> writes user-data and network-config there and stops, without touching the device
+#   WIFI_SSID default "YourNetwork"; asks for the Wi-Fi password, the user's password and the site
+#   CONFIG_ONLY=<dir> writes user-data, network-config and pins.conf there and stops, without touching the device
 set -Eeuo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -21,6 +22,8 @@ HOST="${2:-origin6}"
 IMAGE="${3:-$(ls -t artifacts/*_rpi-arm64.img.xz 2>/dev/null | head -1)}"
 WIFI_SSID="${WIFI_SSID:-YourNetwork}"
 USER_NAME="${USER_NAME:-$USER}"
+SITE_LATITUDE=51.47788      # the default site: 51°28'40" N, 0°00'05" W
+SITE_LONGITUDE=-0.00147
 
 [[ -f "$IMAGE" ]] || fail "No image: run make pi-image first"
 if [[ -z "${CONFIG_ONLY:-}" ]]; then
@@ -40,6 +43,17 @@ read -r -s -p "Wi-Fi password for $WIFI_SSID: " wifi_password; echo
 read -r -s -p "Password for $USER_NAME on $HOST (for sudo): " user_password; echo
 [[ -n "$user_password" ]] || fail "The user needs a password"
 password_hash="$(openssl passwd -6 -stdin <<< "$user_password")"
+# degree <prompt> <default> <limit>: decimal degrees, within +-limit
+degree() {
+  local value
+  read -r -p "$1 in decimal degrees [$2]: " value
+  value="${value:-$2}"
+  [[ "$value" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] && python3 -I -c 'import sys; sys.exit(abs(float(sys.argv[1])) > float(sys.argv[2]))' "$value" "$3" ||
+    fail "$1 $value is not decimal degrees within ±$3"
+  echo "$value"
+}
+latitude="$(degree "Site latitude (north positive)" "$SITE_LATITUDE" 90)"
+longitude="$(degree "Site longitude (east positive)" "$SITE_LONGITUDE" 180)"
 
 config="$(mktemp -d)"
 trap 'rm -rf "$config"' EXIT
@@ -81,11 +95,13 @@ network:
         $(json "$WIFI_SSID"):
           password: $(json "$wifi_password")
 EOF
+# Read by the image's first boot (packaging/pi-image/pins-firstboot.sh) as shell: the values are checked numbers
+printf 'latitude=%s\nlongitude=%s\n' "$latitude" "$longitude" > "$config/pins.conf"
 
 if [[ -n "${CONFIG_ONLY:-}" ]]; then
   mkdir -p "$CONFIG_ONLY"
-  cp "$config/user-data" "$config/network-config" "$CONFIG_ONLY/"
-  echo "[INFO] Wrote $CONFIG_ONLY/user-data and network-config (${#keys[@]} SSH keys)"
+  cp "$config/user-data" "$config/network-config" "$config/pins.conf" "$CONFIG_ONLY/"
+  echo "[INFO] Wrote $CONFIG_ONLY/user-data, network-config and pins.conf (${#keys[@]} SSH keys)"
   exit 0
 fi
 
@@ -108,9 +124,9 @@ udevadm settle
 boot="$(lsblk -lno PATH "$DEVICE" | sed -n 2p)"
 mountpoint="$(udisksctl mount -b "$boot" | sed -n 's/^Mounted .* at \(.*\)$/\1/p')"
 [[ -d "$mountpoint" ]] || fail "Could not mount $boot to add the settings"
-cp "$config/user-data" "$config/network-config" "$mountpoint/"
+cp "$config/user-data" "$config/network-config" "$config/pins.conf" "$mountpoint/"
 sync
 udisksctl unmount -b "$boot" > /dev/null
 udisksctl power-off -b "$DEVICE" 2>/dev/null || true
-echo "[INFO] Done: $HOST with user $USER_NAME (${#keys[@]} SSH keys) on $WIFI_SSID. Take the card out and boot the Pi with it."
+echo "[INFO] Done: $HOST with user $USER_NAME (${#keys[@]} SSH keys) on $WIFI_SSID, site $latitude, $longitude. Take the card out and boot the Pi with it."
 echo "[INFO] The first boot installs PI.N.S. from the card, a few minutes (journalctl -u pins-firstboot), then it is at http://$HOST.local:5000"
