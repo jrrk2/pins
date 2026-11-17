@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds a Raspberry Pi image of PI.N.S. for Raspberry Pi Imager ("Use custom"): Raspberry Pi OS Lite, pinned in packaging/deps.env, with
-#   - the arm64 pins-origin package, which the first boot installs with apt (Debian's OpenCV and the rest come from the internet then)
+#   - the arm64 pins-origin package and the Debian packages it needs (OpenCV and the rest), which the first boot installs without the internet
 #     and starts as the user made in Imager (pins-firstboot.service, then pins@<user>.service)
 #   - the astrometry.net index files for the Origin's field (4208-4211) in /usr/share/astrometry
 #   - the Ethernet port in NetworkManager's shared mode, which serves the Origin DHCP
@@ -23,7 +23,7 @@ export PATH="$PATH:/usr/sbin:/sbin"
 DEB="${1:?Usage: $0 <pins-origin_*_arm64.deb> [index-dir]}"
 WORK=artifacts/pi-image
 INDICES="${2:-$WORK/indices}"
-GROW_MB=1024        # more room in the root filesystem; the first boot grows it to the card anyway
+GROW_MB=1024        # room in the root filesystem for the packages; the first boot grows it to the card anyway
 
 fail() {
   echo "[ERROR] $*" >&2
@@ -72,6 +72,42 @@ truncate -s $(( size * 512 )) "$root"
 e2fsck -fy "$root" > /dev/null || [[ $? -le 1 ]] || fail "The root filesystem of $(basename "$PI_OS_IMAGE_URL") has errors"
 resize2fs -f "$root" > /dev/null
 
+# The Debian packages pins-origin and astrometry.net need, which the first boot installs from the image without the internet: apt here,
+# for arm64 with Raspberry Pi OS's own sources, keys and list of installed packages, downloads exactly what the image lacks
+echo "[INFO] Downloading the packages PI.N.S. needs"
+apt_dir="$(realpath "$WORK")/apt"
+rm -rf "$apt_dir"
+mkdir -p "$apt_dir"/{etc/apt.conf.d,etc/preferences.d,etc/sources.list.d,etc/trusted.gpg.d,keyrings,lists/partial,archives/partial}
+for file in etc/apt/sources.list.d/debian.sources etc/apt/sources.list.d/raspi.sources var/lib/dpkg/status \
+    usr/share/keyrings/debian-archive-keyring.pgp usr/share/keyrings/raspberrypi-archive-keyring.pgp; do
+  debugfs -R "dump /$file $apt_dir/$(basename "$file")" "$root" 2>/dev/null
+  [[ -s "$apt_dir/$(basename "$file")" ]] || fail "/$file is missing from $(basename "$PI_OS_IMAGE_URL")"
+done
+sed "s|/usr/share/keyrings/|$apt_dir/|" "$apt_dir/debian.sources" > "$apt_dir/etc/sources.list.d/debian.sources"
+sed "s|/usr/share/keyrings/|$apt_dir/|" "$apt_dir/raspi.sources" > "$apt_dir/etc/sources.list.d/raspi.sources"
+cat > "$apt_dir/apt.conf" <<EOF
+Dir::Etc "$apt_dir/etc";
+Dir::Etc::sourcelist "/dev/null";
+Dir::State::status "$apt_dir/status";
+Dir::State::lists "$apt_dir/lists";
+Dir::Cache::archives "$apt_dir/archives";
+Dir::Cache "$apt_dir";
+APT::Architecture "arm64";
+APT::Architectures { "arm64"; };
+APT::Install-Recommends "false";
+Debug::NoLocking "true";
+EOF
+APT_CONFIG="$apt_dir/apt.conf" apt-get -qq update
+APT_CONFIG="$apt_dir/apt.conf" apt-get -qq install --download-only -y "$(realpath "$DEB")" astrometry.net > /dev/null
+debs=("$apt_dir"/archives/*.deb)
+[[ -f "${debs[0]}" ]] || fail "apt downloaded no packages"
+echo "[INFO] ${#debs[@]} packages, $(du -ch "${debs[@]}" | tail -1 | cut -f1)"
+# The first boot installs from these files alone: apt, with no package lists at all, finds them enough
+rm -rf "$apt_dir/lists"
+mkdir -p "$apt_dir/lists/partial"
+APT_CONFIG="$apt_dir/apt.conf" apt-get -qq install -s "$(realpath "$DEB")" "${debs[@]}" > "$WORK/offline-install.log" 2>&1 ||
+  { cat "$WORK/offline-install.log" >&2; fail "The packages downloaded are not enough to install $(basename "$DEB") without the internet"; }
+
 echo "[INFO] Adding PI.N.S."
 commands="$WORK/debugfs.txt"
 : > "$commands"
@@ -85,6 +121,10 @@ dir() {
 }
 dir /opt/pins-image
 add "$DEB" "/opt/pins-image/$(basename "$DEB")" 644
+dir /opt/pins-image/debs
+for package in "${debs[@]}"; do
+  add "$package" "/opt/pins-image/debs/$(basename "$package")" 644
+done
 add packaging/pi-image/pins-firstboot.sh /opt/pins-image/pins-firstboot.sh 755
 add packaging/pi-image/pins-firstboot.service /etc/systemd/system/pins-firstboot.service 644
 add packaging/pi-image/pins@.service /etc/systemd/system/pins@.service 644
@@ -117,7 +157,7 @@ debugfs -R "stat /etc/systemd/system/multi-user.target.wants/pins-firstboot.serv
   fail "pins-firstboot.service is not enabled"
 
 dd if="$root" of="$image" bs=512 seek="$start" conv=notrunc status=none
-rm -f "$root"
+rm -rf "$root" "$apt_dir"
 
 echo "[INFO] Compressing"
 xz -T0 -6 -f "$image"
