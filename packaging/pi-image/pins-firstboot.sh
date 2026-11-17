@@ -9,11 +9,15 @@ deb="$(ls /opt/pins-image/pins-origin_*.deb)"
 # Raspberry Pi Imager's settings make the user and join the Wi-Fi during this first boot
 for i in $(seq 120); do
     user="$(getent passwd 1000 | cut -d: -f1)"
-    [ -n "$user" ] && [ "$user" != rpi-first-boot-wizard ] && getent hosts deb.debian.org > /dev/null && break
+    [ -n "$user" ] && [ "$user" != rpi-first-boot-wizard ] && getent hosts deb.debian.org > /dev/null &&
+        [ "$(timedatectl show -p NTPSynchronized --value)" = yes ] && break
     sleep 5
 done
 [ -n "$user" ] || { echo "No user with UID 1000: set one in Raspberry Pi Imager"; exit 1; }
 getent hosts deb.debian.org > /dev/null || { echo "No internet: the first boot downloads the libraries PI.N.S. needs"; exit 1; }
+# The Pi has no clock battery and starts at the image's date: apt rejects the archives' signatures as not yet valid until the time is set
+# from the internet (2026-11-17)
+[ "$(timedatectl show -p NTPSynchronized --value)" = yes ] || { echo "The clock is not set from the internet yet"; exit 1; }
 
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$deb" astrometry.net
