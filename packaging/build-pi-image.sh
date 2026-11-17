@@ -13,7 +13,8 @@
 #
 # Usage: packaging/build-pi-image.sh <pins-origin_*_arm64.deb> [index-dir]
 #   index-dir holds index-4208..4211 (default: downloaded into artifacts/pi-image/indices)
-#   The result is artifacts/pins-origin_<version>_rpi-arm64.img.xz, with its .sha256.
+#   The result is artifacts/pins-origin_<version>_rpi-arm64.img.xz, and the same image in pins-origin_<version>_rpi-arm64.run with the script
+#   that writes it (packaging/flash-pi-card.sh) in front; each with its .sha256.
 set -Eeuo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -192,5 +193,18 @@ echo "[INFO] Compressing"
 xz -T0 -6 -f "$image"
 (cd "$WORK" && sha256sum "$(basename "$image").xz" > "$(basename "$image").xz.sha256")
 mv -f "$image.xz" "$image.xz.sha256" artifacts/
-ls -lh "artifacts/$(basename "$image").xz"
-echo "[INFO] Built artifacts/$(basename "$image").xz: write it with Raspberry Pi Imager (Use custom), with a user and Wi-Fi in its settings"
+
+# The image in one executable file with the script that writes it: packaging/flash-pi-card.sh with the image's checksum and name filled in,
+# then the image after the line __PINS_IMAGE__
+xz_file="artifacts/$(basename "$image").xz"
+run="${xz_file%.img.xz}.run"
+sed -e "s/^PAYLOAD_SHA256=\$/PAYLOAD_SHA256=$(cut -d' ' -f1 "$xz_file.sha256")/" -e "s/^PAYLOAD_NAME=\$/PAYLOAD_NAME=$(basename "$xz_file")/" \
+  packaging/flash-pi-card.sh > "$run"
+grep -q "^PAYLOAD_SHA256=[0-9a-f]\{64\}$" "$run" || fail "The image's checksum did not go into $run"
+printf '__PINS_IMAGE__\n' >> "$run"
+cat "$xz_file" >> "$run"
+chmod 755 "$run"
+(cd artifacts && sha256sum "$(basename "$run")" > "$(basename "$run").sha256")
+ls -lh "$xz_file" "$run"
+echo "[INFO] Built $xz_file, for Raspberry Pi Imager (Use custom, with a user and Wi-Fi in its settings),"
+echo "[INFO] and $run, which writes it itself: $run <device, as /dev/sdb>"

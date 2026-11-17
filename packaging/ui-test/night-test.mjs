@@ -4,7 +4,7 @@
 // Usage: node night-test.mjs [stage ...]    stages, in the night's order (default: all):
 //   setup connect plugins unpark align target livestack park
 //   PINS_HOST   the Pi (default 192.168.1.208); the page is on port 5000, the Advanced API on 1888
-//   SITE        latitude,longitude in decimal degrees (default 51.47788,-0.00147)
+//   SITE        latitude,longitude in decimal degrees (default: the site in the Pi's profile when the test starts)
 //   TARGET      an object to stack instead of the best placed of the list below; FRAMES  how many to stack (default 30)
 //   DRY=1       goes through every stage without pressing what moves the mount or takes frames (unpark, build, slew, capture, park)
 //   Screenshots of each step go to ./shots-<time>.
@@ -14,7 +14,7 @@ import { mkdirSync } from 'node:fs';
 const host = process.env.PINS_HOST ?? '192.168.1.208';
 const page_url = `http://${host}:5000`;
 const api_url = `http://${host}:1888/v2/api`;
-const [latitude, longitude] = (process.env.SITE ?? '51.47788,-0.00147').split(',').map(Number);
+let [latitude, longitude] = (process.env.SITE ?? ',').split(',').map(v => v === '' ? NaN : Number(v));    // NaN: the Pi's profile's, read below
 const ORIGIN = { mount: 'Celestron Origin Mount', camera: 'Celestron Origin Camera', focuser: 'Celestron Origin Focuser', focalLength: 335, focalRatio: 2.2 };
 const ALL = ['setup', 'connect', 'plugins', 'unpark', 'align', 'target', 'livestack', 'park'];
 const stages = process.argv.slice(2).length ? process.argv.slice(2) : ALL;
@@ -62,6 +62,11 @@ async function act(what, button) {
   return true;
 }
 
+if (Number.isNaN(latitude) || Number.isNaN(longitude)) {
+  const site = (await profile()).AstrometrySettings;
+  [latitude, longitude] = [site.Latitude, site.Longitude];
+  if (!latitude && !longitude) { console.error("The Pi's profile has no site: give SITE=latitude,longitude"); process.exit(2); }
+}
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
 const page = await context.newPage();

@@ -4,28 +4,39 @@
 # from the card's boot partition at the first boot. The site (latitude and longitude, decimal degrees, east positive) goes there too, in
 # pins.conf, which the image's first boot puts in PI.N.S.'s profile.
 #
+# make pi-image also puts this script in front of the image in one executable file, pins-origin_<version>_rpi-arm64.run, which writes the
+# image it carries: its build fills in PAYLOAD_SHA256 and PAYLOAD_NAME below, and appends the image after the line __PINS_IMAGE__.
+#
 # Usage: packaging/flash-pi-card.sh <device, as /dev/sdb> [hostname] [image]
-#   hostname  default origin6; image  default the newest artifacts/*_rpi-arm64.img.xz
-#   WIFI_SSID default "YourNetwork"; asks for the Wi-Fi password, the user's password and the site
+#        pins-origin_<version>_rpi-arm64.run <device, as /dev/sdb> [hostname]
+#   hostname  default pins-origin; image  default the newest artifacts/*_rpi-arm64.img.xz
+#   asks for the Wi-Fi network and its password, the user's password and the site, offering WIFI_SSID and SITE (latitude,longitude) if set
 #   CONFIG_ONLY=<dir> writes user-data, network-config and pins.conf there and stops, without touching the device
 set -Eeuo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+PAYLOAD_SHA256=
+PAYLOAD_NAME=
+self="$(readlink -f "${BASH_SOURCE[0]}")"
 
 fail() {
   echo "[ERROR] $*" >&2
   exit 1
 }
 
-DEVICE="${1:?Usage: $0 <device, as /dev/sdb> [hostname] [image]}"
-HOST="${2:-origin6}"
-IMAGE="${3:-$(ls -t artifacts/*_rpi-arm64.img.xz 2>/dev/null | head -1)}"
-WIFI_SSID="${WIFI_SSID:-YourNetwork}"
+DEVICE="${1:?Usage: $0 <device, as /dev/sdb> [hostname]$([[ -n "$PAYLOAD_SHA256" ]] || echo ' [image]')}"
+HOST="${2:-pins-origin}"
 USER_NAME="${USER_NAME:-$USER}"
-SITE_LATITUDE=51.47788      # the default site: 51°28'40" N, 0°00'05" W
-SITE_LONGITUDE=-0.00147
-
-[[ -f "$IMAGE" ]] || fail "No image: run make pi-image first"
+# The image: the one this file carries, or one built in this checkout
+if [[ -n "$PAYLOAD_SHA256" ]]; then
+  IMAGE="$PAYLOAD_NAME"
+  payload_line="$(awk '/^__PINS_IMAGE__$/ { print NR + 1; exit }' "$self")"
+  image() { tail -n +"$payload_line" "$self"; }
+else
+  cd "$(dirname "$self")/.."
+  IMAGE="${3:-$(ls -t artifacts/*_rpi-arm64.img.xz 2>/dev/null | head -1)}"
+  [[ -f "$IMAGE" ]] || fail "No image: run make pi-image first"
+  image() { cat "$IMAGE"; }
+fi
 if [[ -z "${CONFIG_ONLY:-}" ]]; then
   [[ -b "$DEVICE" ]] || fail "$DEVICE is not a block device"
   read -r removable size < <(lsblk -bdno RM,SIZE "$DEVICE")
@@ -39,6 +50,9 @@ for key in ~/.ssh/id_*.pub ${PI_SSH_KEYS:-}; do
   [[ -f "$key" ]] && keys+=("$(cat "$key")")
 done
 
+read -r -p "Wi-Fi network the Pi joins${WIFI_SSID:+ [$WIFI_SSID]}: " ssid
+WIFI_SSID="${ssid:-${WIFI_SSID:-}}"
+[[ -n "$WIFI_SSID" ]] || fail "The Pi needs a Wi-Fi network to be reached on"
 read -r -s -p "Wi-Fi password for $WIFI_SSID: " wifi_password; echo
 read -r -s -p "Password for $USER_NAME on $HOST (for sudo): " user_password; echo
 [[ -n "$user_password" ]] || fail "The user needs a password"
@@ -46,14 +60,16 @@ password_hash="$(openssl passwd -6 -stdin <<< "$user_password")"
 # degree <prompt> <default> <limit>: decimal degrees, within +-limit
 degree() {
   local value
-  read -r -p "$1 in decimal degrees [$2]: " value
+  read -r -p "$1 in decimal degrees${2:+ [$2]}: " value
   value="${value:-$2}"
   [[ "$value" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] && python3 -I -c 'import sys; sys.exit(abs(float(sys.argv[1])) > float(sys.argv[2]))' "$value" "$3" ||
     fail "$1 $value is not decimal degrees within ±$3"
   echo "$value"
 }
-latitude="$(degree "Site latitude (north positive)" "$SITE_LATITUDE" 90)"
-longitude="$(degree "Site longitude (east positive)" "$SITE_LONGITUDE" 180)"
+site_latitude=; site_longitude=
+[[ "${SITE:-}" != *,* ]] || { site_latitude="${SITE%%,*}"; site_longitude="${SITE#*,}"; }
+latitude="$(degree "Site latitude (north positive)" "$site_latitude" 90)"
+longitude="$(degree "Site longitude (east positive)" "$site_longitude" 180)"
 
 config="$(mktemp -d)"
 trap 'rm -rf "$config"' EXIT
@@ -109,7 +125,10 @@ lsblk -o NAME,SIZE,RM,TRAN,MODEL,LABEL "$DEVICE"
 read -r -p "Erase $DEVICE and write $(basename "$IMAGE") as $HOST? Type the device name to go on: " answer
 [[ "$answer" == "$DEVICE" ]] || fail "Stopped: nothing written"
 
-if [[ -f "$IMAGE.sha256" ]]; then
+if [[ -n "$PAYLOAD_SHA256" ]]; then
+  echo "[INFO] Checking the image this file carries"
+  [[ "$(image | sha256sum | cut -d' ' -f1)" == "$PAYLOAD_SHA256" ]] || fail "The image in $(basename "$self") is damaged: download it again"
+elif [[ -f "$IMAGE.sha256" ]]; then
   (cd "$(dirname "$IMAGE")" && sha256sum -c --quiet "$(basename "$IMAGE").sha256") || fail "$IMAGE does not match its checksum"
 fi
 for part in $(lsblk -lno PATH,MOUNTPOINTS "$DEVICE" | awk 'NF == 2 { print $1 }'); do
@@ -117,7 +136,7 @@ for part in $(lsblk -lno PATH,MOUNTPOINTS "$DEVICE" | awk 'NF == 2 { print $1 }'
 done
 
 echo "[INFO] Writing $(basename "$IMAGE") to $DEVICE"
-xz -dc "$IMAGE" | sudo dd of="$DEVICE" bs=4M conv=fsync status=progress
+image | xz -dc | sudo dd of="$DEVICE" bs=4M conv=fsync status=progress
 sudo partprobe "$DEVICE" 2>/dev/null || sudo blockdev --rereadpt "$DEVICE"
 udevadm settle
 
@@ -130,3 +149,5 @@ udisksctl unmount -b "$boot" > /dev/null
 udisksctl power-off -b "$DEVICE" 2>/dev/null || true
 echo "[INFO] Done: $HOST with user $USER_NAME (${#keys[@]} SSH keys) on $WIFI_SSID, site $latitude, $longitude. Take the card out and boot the Pi with it."
 echo "[INFO] The first boot installs PI.N.S. from the card, a few minutes (journalctl -u pins-firstboot), then it is at http://$HOST.local:5000"
+# The end of the script: in the .run file the image follows
+exit 0
